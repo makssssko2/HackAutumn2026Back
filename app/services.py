@@ -5,6 +5,8 @@ from decimal import Decimal
 
 from fastapi import HTTPException
 from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from app.config import today
@@ -30,15 +32,25 @@ def generate_occurrences(db: Session, payment: RecurringPayment, until: date | N
         return
     until = max(until or (today() + timedelta(days=400)), payment.first_due_date)
     existing = set(db.scalars(select(Occurrence.due_date).where(Occurrence.recurring_id == payment.id)))
+    missing = []
     index = 0
     while True:
         due = period_date(payment.first_due_date, payment.frequency, index)
         if due > until:
             break
         if due not in existing:
-            db.add(Occurrence(recurring_id=payment.id, title=payment.title, amount=payment.amount, currency=payment.currency, due_date=due))
+            missing.append(dict(recurring_id=payment.id, title=payment.title, amount=payment.amount, currency=payment.currency, due_date=due))
         index += 1
+    insert_unique(db, Occurrence, missing, ['recurring_id', 'due_date'])
     db.flush()
+
+
+def insert_unique(db: Session, model, values: list[dict], keys: list[str]):
+    # Both the worker and budget requests generate periods. The unique constraint
+    # is the arbiter, so concurrent requests preserve the surrounding transaction.
+    insert = sqlite_insert if db.get_bind().dialect.name == 'sqlite' else pg_insert
+    for start in range(0, len(values), 100):
+        db.execute(insert(model).values(values[start:start + 100]).on_conflict_do_nothing(index_elements=keys))
 
 
 def target_channels(db: Session, payment: RecurringPayment):
@@ -53,10 +65,8 @@ def target_channels(db: Session, payment: RecurringPayment):
 
 def queue_event(db: Session, occurrence: Occurrence, event: str):
     payment = db.get(RecurringPayment, occurrence.recurring_id)
-    for channel in target_channels(db, payment):
-        exists = db.scalar(select(Delivery.id).where(Delivery.occurrence_id == occurrence.id, Delivery.channel_id == channel.id, Delivery.event == event))
-        if not exists:
-            db.add(Delivery(occurrence_id=occurrence.id, channel_id=channel.id, event=event))
+    insert_unique(db, Delivery, [dict(occurrence_id=occurrence.id, channel_id=channel.id, event=event)
+                  for channel in target_channels(db, payment)], ['occurrence_id', 'channel_id', 'event'])
     db.flush()
 
 
@@ -143,7 +153,10 @@ def stop_payment(db: Session, payment: RecurringPayment, actor: str):
     for row in future:
         row.cancelled = True
         row.revision += 1
-        queue_event(db, row, f'state:{row.revision}')
+        # Budget periods that have never been issued must not produce a burst
+        # of cancellation messages when a recurring payment is stopped.
+        if db.scalar(select(Delivery.id).where(Delivery.occurrence_id == row.id).limit(1)):
+            queue_event(db, row, f'state:{row.revision}')
     audit(db, actor, 'payment.stopped', payment.id, title=payment.title)
 
 

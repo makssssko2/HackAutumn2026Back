@@ -1,11 +1,10 @@
 import asyncio
-from datetime import timezone
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.bootstrap import bootstrap
 from app.config import settings
@@ -34,15 +33,20 @@ async def connect(message: Message, bot: Bot):
         return
     parts = (message.text or '').split(maxsplit=1)
     with SessionLocal() as db:
-        link = db.get(ChannelLink, parts[1].strip()) if len(parts) == 2 else None
-        if not link or link.expires_at.replace(tzinfo=timezone.utc) < utcnow():
+        channel_id = db.scalar(delete(ChannelLink).where(
+            ChannelLink.token == (parts[1].strip() if len(parts) == 2 else ''),
+            ChannelLink.expires_at >= utcnow(),
+        ).returning(ChannelLink.channel_id))
+        if not channel_id:
             await message.answer('Код недействителен или истек. Получите новый в панели.')
             return
-        channel = db.get(Channel, link.channel_id)
+        channel = db.get(Channel, channel_id)
+        if not channel or channel.kind != 'telegram':
+            await message.answer('Telegram-канал недоступен. Получите новый код в панели.')
+            return
         channel.config = {**channel.config, 'chat_id': str(message.chat.id)}
         channel.active = True
         audit(db, f'telegram:{message.from_user.id}', 'channel.connected', channel.id, chat_id=str(message.chat.id))
-        db.delete(link)
         db.commit()
     await message.answer('Чат подключен. Здесь будут появляться счета и напоминания.')
 

@@ -273,7 +273,7 @@ def add_channel(data: ChannelIn, user: User = Depends(admin_user), db: Session =
 @app.patch(prefix + '/channels/{channel_id}', tags=['Notifications'])
 def update_channel(channel_id: str, data: ChannelIn, user: User = Depends(admin_user), db: Session = Depends(get_db)):
     row = get_or_404(db, Channel, channel_id)
-    if row.kind == 'inapp' and not data.active:
+    if row.kind == 'inapp' and (not data.active or data.kind != 'inapp'):
         raise HTTPException(409, 'Внутренние уведомления должны оставаться включены')
     check_channel(data)
     config = data.config.copy()
@@ -355,8 +355,10 @@ def remove_group(group_id: str, user: User = Depends(admin_user), db: Session = 
 
 @app.get(prefix + '/notifications', tags=['Notifications'])
 def notifications(user: User = Depends(current_user), db: Session = Depends(get_db)):
-    query = select(Delivery, Occurrence, Channel).join(Occurrence, Delivery.occurrence_id == Occurrence.id).join(Channel, Delivery.channel_id == Channel.id).order_by(Delivery.created_at.desc()).limit(300)
-    rows = [(delivery, row, channel) for delivery, row, channel in db.execute(query) if user.role == 'admin' or channel.kind == 'inapp']
+    query = select(Delivery, Occurrence, Channel).join(Occurrence, Delivery.occurrence_id == Occurrence.id).join(Channel, Delivery.channel_id == Channel.id)
+    if user.role != 'admin':
+        query = query.where(Channel.kind == 'inapp', Delivery.status == 'sent', Delivery.event.in_(['created', 'reminder']))
+    rows = list(db.execute(query.order_by(Delivery.created_at.desc()).limit(300)))
     occurrence_ids = {row.id for _, row, _ in rows}
     receipts = {receipt.occurrence_id: receipt.id for receipt in db.scalars(select(Receipt).where(Receipt.occurrence_id.in_(occurrence_ids), Receipt.voided.is_(False)).order_by(Receipt.created_at))}
     return [{**public(delivery), 'title': row.title, 'amount': str(row.amount), 'currency': row.currency, 'channel_name': channel.name, 'channel_kind': channel.kind, 'due_date': row.due_date, 'payment': occurrence_out(row), 'receipt_id': receipts.get(row.id)} for delivery, row, channel in rows]

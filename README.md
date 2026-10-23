@@ -61,6 +61,8 @@ Delivery jobs are durable and claimed atomically. Ordinary retries and restarts 
 
 Creation sends an immediate event for the first period; within three days of the due date this is the reminder itself. Subsequent reminders are queued when an unpaid period enters the three-day window. Paid periods are skipped. Stopping a template cancels unpaid current/future periods, preserves old debts and history, and stops its reminders. Status changes update previously sent Telegram invoice messages.
 
+Concurrent budget requests and worker runs use conflict-safe inserts for periods and delivery events. Telegram chat-link codes are consumed atomically. Retrying a partially completed Telegram status update accepts messages that already have the requested content and continues updating the remaining messages. Stopping a template only notifies recipients about previously issued periods, without sending cancellations for every future budget period.
+
 ## Domain rules
 
 - Every period is a distinct occurrence with amount/title/currency snapshots; unpaid old periods do not stop new ones.

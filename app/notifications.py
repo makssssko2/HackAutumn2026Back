@@ -37,6 +37,15 @@ def telegram_call(method: str, payload: dict):
         response = client.post(f'https://api.telegram.org/bot{settings.telegram_bot_token}/{method}', json=payload)
         # Never include request URLs (which contain bot tokens) in stored errors.
         if response.status_code >= 400:
+            if method == 'editMessageText' and response.status_code == 400:
+                try:
+                    error = response.json()
+                except ValueError:
+                    error = {}
+                if error.get('error_code') == 400 and str(error.get('description', '')).startswith('Bad Request: message is not modified'):
+                    # A retry may reach an already updated message before the
+                    # remaining messages. This is a successful idempotent edit.
+                    return {'message_id': payload['message_id']}
             raise ValueError(f'Telegram вернул HTTP {response.status_code}')
         body = response.json()
         if not body.get('ok'):
@@ -67,7 +76,7 @@ def send_delivery(db, delivery: Delivery, channel: Channel, row: Occurrence):
             raise ValueError('Telegram-чат еще не привязан')
         previous = list(db.scalars(select(Delivery).where(Delivery.occurrence_id == row.id, Delivery.channel_id == channel.id, Delivery.remote_message_id.is_not(None))))
         if delivery.event.startswith('state:') and previous:
-            for message_id in {item.remote_message_id for item in previous}:
+            for message_id in sorted({item.remote_message_id for item in previous}):
                 telegram_call('editMessageText', {'chat_id': chat_id, 'message_id': int(message_id), 'text': text, 'reply_markup': telegram_buttons(row)})
             return previous[0].remote_message_id
         result = telegram_call('sendMessage', {'chat_id': chat_id, 'text': text, 'reply_markup': telegram_buttons(row)})

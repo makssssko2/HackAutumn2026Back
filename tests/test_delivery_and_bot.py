@@ -2,16 +2,19 @@ import asyncio
 import hashlib
 import hmac
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from threading import Barrier
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import httpx
+import pytest
 from aiogram.types import Message
 from sqlalchemy import select
 
 from app.config import today
-from app.models import Channel, ChannelLink, Delivery, Occurrence, Receipt, User, utcnow
+from app.models import AuditLog, Channel, ChannelLink, Delivery, Occurrence, Receipt, User, utcnow
 from app.schemas import RecurringIn
 from app.services import create_payment
 
@@ -142,3 +145,61 @@ def test_admin_configuration_revokes_previous_admin(db_factory, monkeypatch):
     with db_factory() as db:
         assert db.scalar(select(User).where(User.login == 'admin')).active is False
         assert db.scalar(select(User).where(User.login == 'newadmin')).role == 'admin'
+
+
+def test_telegram_partial_state_update_can_be_retried(db_factory, monkeypatch):
+    import app.notifications as notifications
+    monkeypatch.setattr(notifications.settings, 'telegram_bot_token', 'test-token')
+    updated = set()
+    fail_once = [True]
+    def request(req):
+        assert req.url.path.endswith('/editMessageText')
+        payload = json.loads(req.content)
+        mid = payload['message_id']
+        if mid in updated:
+            return httpx.Response(400, json={'ok': False, 'error_code': 400, 'description': 'Bad Request: message is not modified: specified new message content and reply markup are exactly the same'})
+        if mid == 2 and fail_once[0]:
+            fail_once[0] = False
+            return httpx.Response(500, json={'ok': False})
+        assert payload['reply_markup']['inline_keyboard'][0][0]['callback_data'].startswith('receipt:')
+        updated.add(mid)
+        return httpx.Response(200, json={'ok': True, 'result': {'message_id': mid}})
+    original_client = httpx.Client
+    monkeypatch.setattr(notifications.httpx, 'Client', lambda **kw: original_client(transport=httpx.MockTransport(request), **kw))
+    with db_factory() as db:
+        row = sample(db)
+        row.paid, row.paid_at, row.paid_by = True, today(), 'Tester'
+        channel = Channel(name='Telegram', kind='telegram', config={'chat_id': '-100123'})
+        db.add(channel); db.flush()
+        db.add_all([Delivery(occurrence_id=row.id, channel_id=channel.id, event=event, status='sent', remote_message_id=mid) for event, mid in [('created', '1'), ('reminder', '2')]])
+        delivery = Delivery(occurrence_id=row.id, channel_id=channel.id, event='state:1')
+        db.add(delivery); db.flush()
+        with pytest.raises(ValueError, match='HTTP 500'):
+            notifications.send_delivery(db, delivery, channel, row)
+        assert updated == {1}
+        assert notifications.send_delivery(db, delivery, channel, row) in ('1', '2')
+        assert updated == {1, 2}
+
+
+def test_connect_code_can_only_bind_one_chat_concurrently(db_factory, monkeypatch):
+    import app.telegram_bot as telegram
+    monkeypatch.setattr(telegram, 'SessionLocal', db_factory)
+    monkeypatch.setattr(Message, 'answer', AsyncMock())
+    with db_factory() as db:
+        channel = Channel(name='Telegram', kind='telegram', config={})
+        db.add(channel); db.flush()
+        db.add(ChannelLink(token='race-code', channel_id=channel.id, expires_at=utcnow() + timedelta(minutes=10)))
+        db.commit(); cid = channel.id
+    barrier = Barrier(2)
+    async def member(*args):
+        barrier.wait(timeout=10)
+        return SimpleNamespace(status='administrator')
+    bot = SimpleNamespace(get_chat_member=member)
+    def bind(chat_id):
+        asyncio.run(telegram.connect(message(chat_id, text='/connect race-code'), bot))
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(bind, [-100123, -100456]))
+    with db_factory() as db:
+        assert db.get(ChannelLink, 'race-code') is None
+        assert db.get(Channel, cid).config['chat_id'] in ('-100123', '-100456')
+        assert len(list(db.scalars(select(AuditLog).where(AuditLog.action == 'channel.connected')))) == 1

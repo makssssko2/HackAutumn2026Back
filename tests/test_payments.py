@@ -232,8 +232,11 @@ def test_telegram_api_does_not_expose_bot_token(monkeypatch):
     assert 'private-token' not in str(exc.value)
 
 
-def test_notification_exposes_live_invoice_and_receipt_for_recipient(admin):
+def test_notification_exposes_live_invoice_and_receipt_for_recipient(admin, db_factory, monkeypatch):
+    import app.notifications as notifications
+    monkeypatch.setattr(notifications, 'SessionLocal', db_factory)
     row = first(admin, create(admin))
+    notifications.process_deliveries()
     admin.post('/api/v1/auth/login', json={'login': 'user', 'password': 'user12345'})
     messages = admin.get('/api/v1/notifications').json()
     item = next(item for item in messages if item['occurrence_id'] == row['id'])
@@ -246,3 +249,56 @@ def test_notification_exposes_live_invoice_and_receipt_for_recipient(admin):
     admin.patch('/api/v1/payment-occurrences/' + row['id'], json={'paid': False})
     item = next(item for item in admin.get('/api/v1/notifications').json() if item['occurrence_id'] == row['id'])
     assert item['payment']['paid'] is False and item['receipt_id'] is None
+
+
+def test_concurrent_period_generation_and_reminders(admin, db_factory):
+    from threading import Barrier
+    payment = create(admin)
+    barrier = Barrier(2)
+    def generate(_):
+        with db_factory() as db:
+            template = db.get(RecurringPayment, payment['id'])
+            barrier.wait(timeout=10)
+            generate_occurrences(db, template, date(today().year + 3, 12, 31))
+            prepare_reminders(db)
+            db.commit()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(generate, range(2)))
+    with db_factory() as db:
+        dates = list(db.scalars(select(Occurrence.due_date).where(Occurrence.recurring_id == payment['id'])))
+        assert len(dates) > 24 and len(dates) == len(set(dates))
+        messages = list(db.scalars(select(Delivery)))
+        assert len(messages) == 1 and messages[0].event == 'reminder'
+
+
+def test_external_delivery_volume_does_not_hide_recipient_invoices(admin, db_factory):
+    from app.models import Channel
+    row = first(admin, create(admin))
+    with db_factory() as db:
+        delivery = db.scalar(select(Delivery).where(Delivery.occurrence_id == row['id']))
+        delivery.status = 'sent'
+        channel = Channel(name='External', kind='email', config={'email': 'test@example.com'})
+        db.add(channel); db.flush()
+        db.add_all([Delivery(occurrence_id=row['id'], channel_id=channel.id, event=f'state:{i}', status='sent') for i in range(301)])
+        db.commit()
+    admin.post('/api/v1/auth/login', json={'login': 'user', 'password': 'user12345'})
+    items = admin.get('/api/v1/notifications').json()
+    assert len(items) == 1 and items[0]['occurrence_id'] == row['id']
+    assert items[0]['channel_kind'] == 'inapp'
+
+
+def test_internal_channel_cannot_be_replaced(admin):
+    channel = next(c for c in admin.get('/api/v1/channels').json() if c['kind'] == 'inapp')
+    result = admin.patch('/api/v1/channels/' + channel['id'], json={**channel, 'kind': 'email', 'config': {'email': 'test@example.com'}})
+    assert result.status_code == 409
+
+
+def test_stopping_does_not_notify_unissued_future_periods(admin, db_factory):
+    payment = create(admin)
+    issued = first(admin, payment)
+    assert admin.delete('/api/v1/recurring-payments/' + payment['id']).status_code == 200
+    with db_factory() as db:
+        messages = list(db.scalars(select(Delivery)))
+        assert len(messages) == 2
+        assert all(item.occurrence_id == issued['id'] for item in messages)
+        assert {item.event for item in messages} == {'reminder', 'state:1'}
