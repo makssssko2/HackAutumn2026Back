@@ -87,6 +87,6 @@ Tests default to fresh temporary SQLite databases. To test PostgreSQL, set `TEST
 
 ## Demo walkthrough
 
-Sign in as admin → add a recurring payment → observe its notification → sign in as demo user → confirm payment → download the demonstration receipt → inspect the next period. Also show the seeded overdue rent, correct its actual payment date, and compare monthly/yearly totals by currency.
+Sign in as admin → use **Выставить счет** and choose recipients → inspect delivery → sign in as demo user → open **Уведомления** (or the connected Telegram chat) → confirm payment inside the notification → download its demonstration receipt → inspect the next period. Administrative screens issue and monitor invoices; they do not offer demo payment. Also show the seeded overdue rent, correct its actual payment date as a regular user, and compare monthly/yearly totals by currency.
 
 Telegram/SMTP live delivery needs user-provided credentials; without them the in-app workflow is fully usable. Local Git only: no remote configured or push performed.

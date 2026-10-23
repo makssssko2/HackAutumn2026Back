@@ -356,7 +356,10 @@ def remove_group(group_id: str, user: User = Depends(admin_user), db: Session = 
 @app.get(prefix + '/notifications', tags=['Notifications'])
 def notifications(user: User = Depends(current_user), db: Session = Depends(get_db)):
     query = select(Delivery, Occurrence, Channel).join(Occurrence, Delivery.occurrence_id == Occurrence.id).join(Channel, Delivery.channel_id == Channel.id).order_by(Delivery.created_at.desc()).limit(300)
-    return [{**public(delivery), 'title': row.title, 'amount': str(row.amount), 'currency': row.currency, 'channel_name': channel.name, 'channel_kind': channel.kind, 'due_date': row.due_date} for delivery, row, channel in db.execute(query) if user.role == 'admin' or channel.kind == 'inapp']
+    rows = [(delivery, row, channel) for delivery, row, channel in db.execute(query) if user.role == 'admin' or channel.kind == 'inapp']
+    occurrence_ids = {row.id for _, row, _ in rows}
+    receipts = {receipt.occurrence_id: receipt.id for receipt in db.scalars(select(Receipt).where(Receipt.occurrence_id.in_(occurrence_ids), Receipt.voided.is_(False)).order_by(Receipt.created_at))}
+    return [{**public(delivery), 'title': row.title, 'amount': str(row.amount), 'currency': row.currency, 'channel_name': channel.name, 'channel_kind': channel.kind, 'due_date': row.due_date, 'payment': occurrence_out(row), 'receipt_id': receipts.get(row.id)} for delivery, row, channel in rows]
 
 
 @app.post(prefix + '/notifications/{delivery_id}/retry', tags=['Notifications'])

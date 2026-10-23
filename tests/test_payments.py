@@ -230,3 +230,19 @@ def test_telegram_api_does_not_expose_bot_token(monkeypatch):
     with pytest.raises(ValueError, match='HTTP 403') as exc:
         notifications.telegram_call('sendMessage', {})
     assert 'private-token' not in str(exc.value)
+
+
+def test_notification_exposes_live_invoice_and_receipt_for_recipient(admin):
+    row = first(admin, create(admin))
+    admin.post('/api/v1/auth/login', json={'login': 'user', 'password': 'user12345'})
+    messages = admin.get('/api/v1/notifications').json()
+    item = next(item for item in messages if item['occurrence_id'] == row['id'])
+    assert item['payment']['paid'] is False and item['receipt_id'] is None
+    assert item['channel_kind'] == 'inapp'
+    assert admin.patch('/api/v1/payment-occurrences/' + row['id'], json={'paid': True, 'demo': True}).status_code == 200
+    item = next(item for item in admin.get('/api/v1/notifications').json() if item['occurrence_id'] == row['id'])
+    assert item['payment']['paid'] is True and item['receipt_id']
+    assert admin.get('/api/v1/receipts/' + item['receipt_id']).status_code == 200
+    admin.patch('/api/v1/payment-occurrences/' + row['id'], json={'paid': False})
+    item = next(item for item in admin.get('/api/v1/notifications').json() if item['occurrence_id'] == row['id'])
+    assert item['payment']['paid'] is False and item['receipt_id'] is None
