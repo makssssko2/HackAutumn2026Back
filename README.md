@@ -10,7 +10,7 @@ docker compose up -d --build
 docker compose exec api python -m app.seed
 ```
 
-Set `ADMIN_LOGIN` and `ADMIN_PASSWORD` in `.env`. The example uses `admin / change-me-before-use` for local development. Explicit demo seeding creates the ordinary account `demo / demo12345`, eight example expenses, and audience groups. Seeding is idempotent and never resets existing payments. No external channels are seeded.
+Set `ADMIN_LOGIN` and `ADMIN_PASSWORD` in `.env`. The example uses `admin / change-me-before-use` for local development. The web application and authenticated HTTP API are administrator-only. Explicit demo seeding creates a sample participant record, eight example expenses, and audience groups. Participant records cannot sign in to the web application. Seeding is idempotent and never resets existing payments. No external channels are seeded.
 
 API: `http://localhost:8000`. Health: `/health`. Start the neighboring Front repository to sign in, then open `/api/v1/docs` in that same browser. Swagger and the live `/api/v1/openapi.json` require the session cookie. The committed `openapi.json` can be read without running the application.
 
@@ -39,13 +39,13 @@ Do not run the local API on port 8000 while the Docker API uses that port. Local
 
 ## Telegram
 
-1. Create a bot in BotFather and put its token in the ignored `.env` as `TELEGRAM_BOT_TOKEN`.
-2. Start it: `docker compose --profile telegram up -d bot` or locally `python -m app.telegram_bot`.
+1. Open the official https://t.me/BotFather, run `/newbot`, and create a bot. Put the issued token in `Back/.env`: `TELEGRAM_BOT_TOKEN=your_token`. This ignored file is server configuration; no token belongs in Front or in a group message.
+2. From Back, run `docker compose --profile telegram up -d --build --force-recreate api worker bot`. This recreates all three services with the new token. For a local Python setup, restart API and worker, then run `python -m app.telegram_bot`.
 3. In the admin UI, add a Telegram channel and click **Подключить чат**.
-4. Add the bot to the group. A group administrator runs the one-time `/connect CODE` command within ten minutes. An alternative for API clients is creating a channel with `config.chat_id`.
+4. Add the bot to the group and allow it to send messages and documents. A group administrator runs the one-time `/connect CODE` command within ten minutes. Address it explicitly as `/connect@your_bot_username CODE` so it also works with Telegram privacy mode. An alternative for API clients is creating a channel with `config.chat_id`.
 5. Use **Тест**, then inspect **Уведомления**. A running worker sends queued events.
 
-Any participant in a connected target chat can use **Оплатить**, then confirm demo payment. The confirmation button belongs to the participant who opened it. **Уже оплачено** records an external payment without fabricating a demo receipt. Bot callbacks cannot administer templates or users. They are validated against connected chats and a delivery for that specific invoice. Web/API access still requires an application account.
+Any participant in a connected target chat can use **Оплатить**, then confirm demo payment, without a web account. The confirmation button belongs to the participant who opened it. **Уже оплачено** records an external payment without fabricating a demo receipt. Bot callbacks cannot administer templates or users. They are validated against connected chats and a delivery for that specific invoice. Web/API access requires the administrator account; participant login and old participant sessions are rejected server-side.
 
 The same domain service handles web and bot confirmation. A conditional revision update permits one winner on simultaneous clicks. Demo receipts are sent as HTML files to the group and retained in the invoice card. They are labeled as demonstrations.
 
@@ -55,7 +55,7 @@ Default broadcast means all active configured channels. An administrator can cre
 
 - Email: set `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`; optionally username/password and STARTTLS. Each email channel names one recipient.
 - Webhook: HTTP(S) JSON, no redirects, public addresses by default. `X-Invoice-Event-ID` is stable across retries. `X-Invoice-Signature` is the hex HMAC-SHA256 of the exact request body using the channel secret. Use the event ID to deduplicate on the receiver. Private destinations are only allowed when explicitly configured with `ALLOW_PRIVATE_WEBHOOKS=true` for a trusted development setup.
-- In-app: enabled automatically; visible without external credentials.
+- In-app: enabled automatically as the administrator's delivery journal. It has no participant portal or payment controls.
 
 Delivery jobs are durable and claimed atomically. Ordinary retries and restarts do not enqueue duplicate reminders for an occurrence/channel/event. Definite failures retry with backoff up to five times. A timeout or interrupted sender has an unknown result: status becomes **Проверьте доставку**, requiring inspection before manual retry. Telegram and SMTP do not provide end-to-end exactly-once delivery guarantees.
 
@@ -89,6 +89,6 @@ Tests default to fresh temporary SQLite databases. To test PostgreSQL, set `TEST
 
 ## Demo walkthrough
 
-Sign in as admin → use **Выставить счет** and choose recipients → inspect delivery → sign in as demo user → open **Уведомления** (or the connected Telegram chat) → confirm payment inside the notification → download its demonstration receipt → inspect the next period. Administrative screens issue and monitor invoices; they do not offer demo payment. Also show the seeded overdue rent, correct its actual payment date as a regular user, and compare monthly/yearly totals by currency.
+Sign in as admin → connect Telegram → use **Выставить счет** and choose recipients → inspect delivery → open the connected Telegram group as a participant → confirm payment inside the notification → receive the demonstration receipt → inspect the updated status and independent next period in the admin panel. Administrative screens issue and monitor invoices; they do not offer demo payment. The authenticated administrator API retains status/date correction and cancellation endpoints for historical corrections. Compare monthly/yearly totals by currency.
 
-Telegram/SMTP live delivery needs user-provided credentials; without them the in-app workflow is fully usable. Local Git only: no remote configured or push performed.
+Telegram/SMTP live delivery needs user-provided credentials. Without them, the admin panel and delivery journal work, but participant payment through Telegram requires configuring and starting the bot. Local Git only: no remote configured or push performed.

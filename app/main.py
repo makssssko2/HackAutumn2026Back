@@ -35,7 +35,7 @@ async def lifespan(app):
     yield
 
 
-app = FastAPI(title='Invoice Keeper API', version='1.0.0', description='Учет регулярных расходов, уведомления и демонстрационная оплата.', lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title='Invoice Keeper API', version='1.0.0', description='Учет регулярных расходов и уведомления. Веб-панель и HTTP API доступны только администратору. Участники подтверждают демонстрационную оплату в Telegram без веб-аккаунта.', lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.add_middleware(CORSMiddleware, allow_origins=settings.allowed_origins, allow_credentials=True, allow_methods=['GET', 'POST', 'PATCH', 'DELETE'], allow_headers=['Content-Type'])
 prefix = '/api/v1'
 login_attempts = defaultdict(list)
@@ -86,6 +86,10 @@ def login(data: LoginIn, request: Request, response: Response, db: Session = Dep
         audit(db, 'anonymous', 'auth.failed', details_login=data.login)
         db.commit()
         raise HTTPException(401, 'Неверный логин или пароль')
+    if user.role != 'admin':
+        audit(db, user.login, 'auth.denied', user.id, reason='admin_only_web')
+        db.commit()
+        raise HTTPException(403, 'Веб-панель доступна только администратору. Используйте уведомления в Telegram.')
     token = secrets.token_urlsafe(48)
     db.add(AuthSession(token_hash=token_hash(token), user_id=user.id, expires_at=now + timedelta(days=7)))
     audit(db, user.login, 'auth.login', user.id)
@@ -356,8 +360,6 @@ def remove_group(group_id: str, user: User = Depends(admin_user), db: Session = 
 @app.get(prefix + '/notifications', tags=['Notifications'])
 def notifications(user: User = Depends(current_user), db: Session = Depends(get_db)):
     query = select(Delivery, Occurrence, Channel).join(Occurrence, Delivery.occurrence_id == Occurrence.id).join(Channel, Delivery.channel_id == Channel.id)
-    if user.role != 'admin':
-        query = query.where(Channel.kind == 'inapp', Delivery.status == 'sent', Delivery.event.in_(['created', 'reminder']))
     rows = list(db.execute(query.order_by(Delivery.created_at.desc()).limit(300)))
     occurrence_ids = {row.id for _, row, _ in rows}
     receipts = {receipt.occurrence_id: receipt.id for receipt in db.scalars(select(Receipt).where(Receipt.occurrence_id.in_(occurrence_ids), Receipt.voided.is_(False)).order_by(Receipt.created_at))}

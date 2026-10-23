@@ -7,7 +7,8 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from app.config import today
-from app.models import AudienceGroup, Channel, Delivery, Occurrence, Receipt, RecurringPayment, User
+from app.models import AudienceGroup, AuthSession, Channel, Delivery, Occurrence, Receipt, RecurringPayment, User, utcnow
+from app.security import token_hash
 from app.schemas import RecurringIn
 from app.services import confirm_occurrence, create_payment, generate_occurrences, period_date, prepare_reminders, stop_payment
 
@@ -27,14 +28,25 @@ def test_auth_and_logout(client):
     assert client.get('/api/v1/payment-occurrences').status_code == 401
     assert client.get('/api/v1/docs').status_code == 401
     assert client.post('/api/v1/auth/login', json={'login': 'user', 'password': 'wrong'}).status_code == 401
-    assert client.post('/api/v1/auth/login', json={'login': 'user', 'password': 'user12345'}).status_code == 200
-    assert client.get('/api/v1/auth/me').json()['role'] == 'user'
+    denied = client.post('/api/v1/auth/login', json={'login': 'user', 'password': 'user12345'})
+    assert denied.status_code == 403 and 'администратору' in denied.json()['detail']
+    assert 'ik_session' not in denied.cookies
+    assert client.get('/api/v1/auth/me').status_code == 401
+    assert client.post('/api/v1/auth/login', json={'login': 'admin', 'password': 'admin12345'}).status_code == 200
+    assert client.get('/api/v1/auth/me').json()['role'] == 'admin'
     assert client.post('/api/v1/auth/logout').status_code == 200
     assert client.get('/api/v1/auth/me').status_code == 401
 
 
-def test_user_cannot_admin_even_with_forged_role(client):
-    client.post('/api/v1/auth/login', json={'login': 'user', 'password': 'user12345'})
+def test_existing_participant_session_cannot_access_web_api(client, db_factory):
+    with db_factory() as db:
+        user = db.scalar(select(User).where(User.login == 'user'))
+        db.add(AuthSession(token_hash=token_hash('old-user-session'), user_id=user.id, expires_at=utcnow() + timedelta(hours=1)))
+        db.commit()
+    client.cookies.set('ik_session', 'old-user-session')
+    for path in ('/auth/me', '/recurring-payments', '/payment-occurrences', '/payment-occurrences/missing', '/payments/summary', '/payments/budget', '/notifications', '/groups', '/settings', '/audit', '/docs', '/openapi.json', '/receipts/missing', '/attachments/missing/download'):
+        assert client.get('/api/v1' + path).status_code == 403, path
+    assert client.patch('/api/v1/payment-occurrences/missing', json={'paid': True, 'demo': True}).status_code == 403
     assert client.post('/api/v1/recurring-payments', json={'title': 'X', 'amount': '1', 'currency': 'RUB', 'first_due_date': str(today())}).status_code == 403
     assert client.get('/api/v1/users').status_code == 403
     assert client.post('/api/v1/users', json={'login': 'hacker', 'name': 'X', 'password': 'password123', 'role': 'admin'}).status_code == 403
@@ -169,12 +181,11 @@ def test_invalid_dates_amounts_and_future_payment(admin):
     assert admin.patch('/api/v1/payment-occurrences/' + row['id'], json={'paid': True, 'paid_at': str(today() + timedelta(days=1))}).status_code == 422
 
 
-def test_user_can_confirm_and_admin_is_protected(admin):
+def test_admin_is_protected_and_can_correct_payment_via_api(admin):
     row = first(admin, create(admin))
     admin_id = admin.get('/api/v1/auth/me').json()['id']
     assert admin.patch('/api/v1/users/' + admin_id, json={'name': 'Bad'}).status_code == 403
     assert admin.delete('/api/v1/users/' + admin_id).status_code == 403
-    admin.post('/api/v1/auth/login', json={'login': 'user', 'password': 'user12345'})
     assert admin.patch('/api/v1/payment-occurrences/' + row['id'], json={'paid': True}).status_code == 200
 
 
@@ -232,12 +243,11 @@ def test_telegram_api_does_not_expose_bot_token(monkeypatch):
     assert 'private-token' not in str(exc.value)
 
 
-def test_notification_exposes_live_invoice_and_receipt_for_recipient(admin, db_factory, monkeypatch):
+def test_admin_journal_exposes_live_invoice_and_receipt(admin, db_factory, monkeypatch):
     import app.notifications as notifications
     monkeypatch.setattr(notifications, 'SessionLocal', db_factory)
     row = first(admin, create(admin))
     notifications.process_deliveries()
-    admin.post('/api/v1/auth/login', json={'login': 'user', 'password': 'user12345'})
     messages = admin.get('/api/v1/notifications').json()
     item = next(item for item in messages if item['occurrence_id'] == row['id'])
     assert item['payment']['paid'] is False and item['receipt_id'] is None
@@ -271,7 +281,7 @@ def test_concurrent_period_generation_and_reminders(admin, db_factory):
         assert len(messages) == 1 and messages[0].event == 'reminder'
 
 
-def test_external_delivery_volume_does_not_hide_recipient_invoices(admin, db_factory):
+def test_admin_journal_retains_latest_external_deliveries(admin, db_factory):
     from app.models import Channel
     row = first(admin, create(admin))
     with db_factory() as db:
@@ -281,10 +291,9 @@ def test_external_delivery_volume_does_not_hide_recipient_invoices(admin, db_fac
         db.add(channel); db.flush()
         db.add_all([Delivery(occurrence_id=row['id'], channel_id=channel.id, event=f'state:{i}', status='sent') for i in range(301)])
         db.commit()
-    admin.post('/api/v1/auth/login', json={'login': 'user', 'password': 'user12345'})
     items = admin.get('/api/v1/notifications').json()
-    assert len(items) == 1 and items[0]['occurrence_id'] == row['id']
-    assert items[0]['channel_kind'] == 'inapp'
+    assert len(items) == 300 and all(item['occurrence_id'] == row['id'] for item in items)
+    assert all(item['channel_kind'] == 'email' for item in items)
 
 
 def test_internal_channel_cannot_be_replaced(admin):
