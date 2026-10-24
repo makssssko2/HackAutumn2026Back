@@ -1,0 +1,151 @@
+from decimal import Decimal
+
+from fastapi import HTTPException
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.orm import Session
+
+from app.models import utcnow
+from app.models_b2b import (BusinessPartner, BuyerOrganization, IncomingInvoice,
+                             IncomingInvoiceDocument, IncomingInvoiceHistory,
+                            IncomingInvoiceOutbox, IncomingInvoicePayment,
+                            PartnerBankAccount)
+
+
+def invoice_state(invoice: IncomingInvoice) -> dict:
+    return {'review_status': invoice.review_status, 'payment_status': invoice.payment_status, 'revision': invoice.revision}
+
+
+def record_history(db: Session, invoice: IncomingInvoice, action: str, actor_type: str, actor_id: str | None, previous: dict | None, reason: str | None = None) -> None:
+    db.add(IncomingInvoiceHistory(invoice_id=invoice.id, action=action, previous_state=previous, new_state=invoice_state(invoice), actor_type=actor_type, actor_id=actor_id, reason=reason))
+
+
+def enqueue_invoice_event(db: Session, invoice: IncomingInvoice, event_type: str) -> None:
+    payload = {
+        'invoice_id': invoice.id,
+        'revision': invoice.revision,
+        'event_type': event_type,
+        'environment': invoice.environment,
+        'number': invoice.number,
+        'title': invoice.title,
+        'amount': str(invoice.amount),
+        'currency': invoice.currency,
+        'due_date': str(invoice.due_date),
+    }
+    values = {
+        'invoice_id': invoice.id,
+        'revision': invoice.revision,
+        'event_type': event_type,
+        'payload': payload,
+    }
+    dialect = db.bind.dialect.name
+    if dialect == 'postgresql':
+        statement = postgresql_insert(IncomingInvoiceOutbox).values(**values)
+    elif dialect == 'sqlite':
+        statement = sqlite_insert(IncomingInvoiceOutbox).values(**values)
+    else:
+        db.add(IncomingInvoiceOutbox(**values))
+        return
+    db.execute(statement.on_conflict_do_nothing(index_elements=['invoice_id', 'revision', 'event_type']))
+
+
+def require_revision(invoice: IncomingInvoice, expected_revision: int) -> None:
+    if invoice.revision != expected_revision:
+        raise HTTPException(409, 'revision_conflict')
+
+
+def validate_create_references(db: Session, partner_id: str, buyer_id: str, account_id: str) -> tuple[BuyerOrganization, PartnerBankAccount]:
+    buyer = db.get(BuyerOrganization, buyer_id)
+    account = db.scalar(select(PartnerBankAccount).where(PartnerBankAccount.id == account_id, PartnerBankAccount.partner_id == partner_id, PartnerBankAccount.active.is_(True), PartnerBankAccount.verified.is_(True)))
+    if buyer is None or not buyer.active or account is None:
+        raise HTTPException(422, 'Buyer access or verified bank account is unavailable')
+    from app.models_b2b import PartnerBuyerAccess
+    access = db.scalar(select(PartnerBuyerAccess.id).where(PartnerBuyerAccess.partner_id == partner_id, PartnerBuyerAccess.buyer_id == buyer_id))
+    if access is None:
+        raise HTTPException(422, 'Buyer access is unavailable')
+    return buyer, account
+
+
+def snapshot_supplier(partner: BusinessPartner) -> dict:
+    return {'name': partner.name, 'inn': partner.inn, 'kpp': partner.kpp}
+
+
+def snapshot_buyer(buyer: BuyerOrganization) -> dict:
+    return {'name': buyer.name, 'inn': buyer.inn, 'kpp': buyer.kpp}
+
+
+def snapshot_account(account: PartnerBankAccount) -> dict:
+    return {'account_number': account.account_number, 'bank_name': account.bank_name, 'bank_bic': account.bank_bic, 'correspondent_account': account.correspondent_account}
+
+
+def submit_invoice(db: Session, invoice: IncomingInvoice, expected_revision: int, actor_id: str) -> None:
+    require_revision(invoice, expected_revision)
+    if invoice.review_status != 'draft':
+        raise HTTPException(409, 'invalid_transition')
+    document = db.scalar(select(IncomingInvoiceDocument.id).where(IncomingInvoiceDocument.invoice_id == invoice.id, IncomingInvoiceDocument.document_type == 'invoice', IncomingInvoiceDocument.content_type == 'application/pdf', IncomingInvoiceDocument.scan_status == 'clean'))
+    if document is None:
+        raise HTTPException(422, 'A clean PDF invoice document is required')
+    partner = db.get(BusinessPartner, invoice.partner_id)
+    buyer = db.get(BuyerOrganization, invoice.buyer_id)
+    account = db.get(PartnerBankAccount, invoice.bank_account_id)
+    if partner is None or buyer is None or account is None:
+        raise HTTPException(409, 'Invoice references are unavailable')
+    previous = invoice_state(invoice)
+    invoice.supplier_snapshot = snapshot_supplier(partner)
+    invoice.buyer_snapshot = snapshot_buyer(buyer)
+    invoice.bank_account_snapshot = snapshot_account(account)
+    invoice.review_status = 'submitted'
+    invoice.submitted_at = utcnow()
+    invoice.revision += 1
+    record_history(db, invoice, 'submitted', 'partner', actor_id, previous)
+    enqueue_invoice_event(db, invoice, 'incoming_invoice.submitted')
+
+
+def transition_invoice(db: Session, invoice: IncomingInvoice, expected_revision: int, action: str, actor_type: str, actor_id: str, reason: str | None = None) -> None:
+    require_revision(invoice, expected_revision)
+    allowed = {
+        ('partner', 'cancel'): {'draft', 'submitted'},
+        ('admin', 'approve'): {'submitted'},
+        ('admin', 'reject'): {'submitted'},
+        ('admin', 'cancel'): {'approved'},
+    }
+    if invoice.review_status not in allowed[(actor_type, action)] or (action == 'cancel' and invoice.payment_status == 'paid'):
+        raise HTTPException(409, 'invalid_transition')
+    if action in {'reject', 'cancel'} and not reason:
+        raise HTTPException(422, 'reason is required')
+    previous = invoice_state(invoice)
+    invoice.review_status = {'approve': 'approved', 'reject': 'rejected', 'cancel': 'cancelled'}[action]
+    invoice.decision_reason = reason if action in {'reject', 'cancel'} else None
+    invoice.decided_at = utcnow() if actor_type == 'admin' else invoice.decided_at
+    invoice.revision += 1
+    record_history(db, invoice, action + 'd', actor_type, actor_id, previous, reason)
+    event_types = {'approve': 'approved', 'reject': 'rejected', 'cancel': 'cancelled'}
+    enqueue_invoice_event(db, invoice, 'incoming_invoice.' + event_types[action])
+
+
+def record_payment(db: Session, invoice: IncomingInvoice, expected_revision: int, amount: Decimal, paid_at, reference: str, user_id: str) -> None:
+    require_revision(invoice, expected_revision)
+    if invoice.review_status != 'approved' or invoice.payment_status != 'unpaid' or amount != invoice.amount:
+        raise HTTPException(409, 'invalid_payment')
+    previous = invoice_state(invoice)
+    db.add(IncomingInvoicePayment(invoice_id=invoice.id, amount=amount, currency='RUB', paid_at=paid_at, reference=reference, recorded_by_user_id=user_id))
+    invoice.payment_status = 'paid'
+    invoice.revision += 1
+    record_history(db, invoice, 'payment_recorded', 'admin', user_id, previous)
+    enqueue_invoice_event(db, invoice, 'incoming_invoice.payment_recorded')
+
+
+def reverse_payment(db: Session, invoice: IncomingInvoice, expected_revision: int, reason: str, user_id: str) -> None:
+    require_revision(invoice, expected_revision)
+    payment = db.scalar(select(IncomingInvoicePayment).where(IncomingInvoicePayment.invoice_id == invoice.id, IncomingInvoicePayment.reversed_at.is_(None)))
+    if invoice.payment_status != 'paid' or payment is None:
+        raise HTTPException(409, 'invalid_payment_reversal')
+    previous = invoice_state(invoice)
+    payment.reversed_at = utcnow()
+    payment.reversed_by_user_id = user_id
+    payment.reversal_reason = reason
+    invoice.payment_status = 'unpaid'
+    invoice.revision += 1
+    record_history(db, invoice, 'payment_reversed', 'admin', user_id, previous, reason)
+    enqueue_invoice_event(db, invoice, 'incoming_invoice.payment_reversed')
