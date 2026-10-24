@@ -6,7 +6,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import attachments, audit, auth, channels, groups, notifications, occurrences, one_time_payments, payments, receipts, reports, system, users
+from app.api import attachments, audit, auth, channels, groups, integrations, notifications, occurrences, one_time_payments, payments, receipts, reports, system, users
 from app.api.auth import login_attempts  # re-exported for tests and legacy imports
 from app.notifications import telegram_call  # re-exported: tests monkeypatch main.telegram_call
 from app.core.bootstrap import bootstrap
@@ -73,6 +73,7 @@ app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(payments.router)
 app.include_router(one_time_payments.router)
+app.include_router(integrations.router)
 app.include_router(occurrences.router)
 app.include_router(reports.router)
 app.include_router(channels.router)
