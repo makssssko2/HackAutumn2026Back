@@ -8,11 +8,11 @@ from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboar
 from fastapi import HTTPException
 from sqlalchemy import delete, select
 
-from app.config import today
+from app.core.config import today
+from app.domain.services import confirm_occurrence
 from app.models import BotAction, Receipt, utcnow
-from app.message_templates import amount_label
-from app.receipts import receipt_html
-from app.services import confirm_occurrence
+from app.presentation.message_templates import amount_label
+from app.presentation.receipts import receipt_html
 
 MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
 

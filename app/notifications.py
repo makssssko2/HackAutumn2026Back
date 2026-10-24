@@ -13,12 +13,12 @@ from urllib.parse import urlparse
 import httpx
 from sqlalchemy import or_, select, update
 
-from app.config import settings
-from app.db import SessionLocal
+from app.core.config import settings
+from app.core.db import SessionLocal
+from app.domain.services import occurrence_out, prepare_reminders
 from app.models import Channel, Delivery, Occurrence, RecurringPayment, utcnow
-from app.message_templates import email_html, telegram_message
+from app.presentation.message_templates import email_html, telegram_message
 from app.payment_access import email_payment_url
-from app.services import occurrence_out, prepare_reminders
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +151,7 @@ def process_deliveries(limit=100):
                 delivery.remote_message_id = send_delivery(db, delivery, channel, row)
                 delivery.status = 'sent'
                 delivery.error = None
-            except (httpx.TimeoutException, httpx.NetworkError, smtplib.SMTPServerDisconnected):
+            except (httpx.TimeoutException, httpx.NetworkError, smtplib.SMTPServerDisconnected, TimeoutError):
                 delivery.status = 'uncertain'
                 delivery.error = 'Нет подтверждения доставки; проверьте канал перед повтором'
             except Exception as exc:

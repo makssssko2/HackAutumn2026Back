@@ -3,13 +3,13 @@ from datetime import timedelta
 
 from sqlalchemy import select
 
-from app.bootstrap import bootstrap
-from app.config import today
-from app.db import SessionLocal
+from app.core.bootstrap import bootstrap
+from app.core.config import today
+from app.core.db import SessionLocal
+from app.core.security import hash_password
+from app.domain.services import confirm_occurrence, create_payment
 from app.models import AudienceGroup, Channel, Occurrence, RecurringPayment, User
 from app.schemas import RecurringIn
-from app.security import hash_password
-from app.services import confirm_occurrence, create_payment
 
 
 def main():

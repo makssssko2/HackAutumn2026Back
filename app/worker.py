@@ -1,8 +1,8 @@
 import logging
 import time
 
-from app.bootstrap import bootstrap
-from app.config import settings
+from app.core.bootstrap import bootstrap
+from app.core.config import settings
 from app.notifications import tick
 
 

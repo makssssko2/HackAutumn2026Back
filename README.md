@@ -53,6 +53,8 @@ The same domain service handles web and bot confirmation. A conditional revision
 
 Default broadcast means all active configured channels. An administrator can create named audience groups containing channel IDs and select groups for a recurring payment. Repeated recipients are deduplicated. In-app events retain a complete shared journal. Groups affect delivery, not web visibility.
 
+A new channel becomes a delivery target from its connection moment: for Telegram this is the successful chat link, for email and webhook it is channel creation. Invoices issued earlier are not queued for that channel. Channels that already existed before this rule keep their historical delivery behavior.
+
 - Email: set `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`, and provider credentials. `SMTP_SSL=true` enables implicit TLS (usually port 465); `SMTP_SSL=false` with `SMTP_STARTTLS=true` enables STARTTLS (usually 587). Implicit TLS takes precedence over STARTTLS. Both modes verify TLS certificates. Each email channel names one recipient.
 - Webhook: HTTP(S) JSON, no redirects, public addresses by default. `X-Invoice-Event-ID` is stable across retries. `X-Invoice-Signature` is the hex HMAC-SHA256 of the exact request body using the channel secret. Use the event ID to deduplicate on the receiver. Private destinations are only allowed when explicitly configured with `ALLOW_PRIVATE_WEBHOOKS=true` for a trusted development setup.
 - In-app: enabled automatically as the administrator's delivery journal. It has no participant portal or payment controls.

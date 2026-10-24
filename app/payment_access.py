@@ -7,11 +7,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.config import settings, today
-from app.db import get_db
+from app.core.config import settings, today
+from app.core.db import get_db
+from app.domain.services import confirm_occurrence, occurrence_out
 from app.models import Channel, PaymentLink, Occurrence, Receipt, utcnow
-from app.receipts import receipt_html
-from app.services import confirm_occurrence, occurrence_out
+from app.presentation.receipts import receipt_html
 
 router = APIRouter(prefix='/api/v1/public/payments', tags=['Recipient payment'])
 

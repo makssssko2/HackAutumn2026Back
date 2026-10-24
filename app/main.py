@@ -17,16 +17,16 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.bootstrap import bootstrap
-from app.config import settings, today
-from app.db import Base, engine, get_db
+from app.core.bootstrap import bootstrap
+from app.core.config import settings, today
+from app.core.db import Base, engine, get_db
+from app.core.security import admin_user, current_user, hash_password, token_hash, verify_password
+from app.domain.services import audit, confirm_occurrence, create_payment, generate_occurrences, occurrence_out, queue_event, stop_payment, summarize
 from app.models import Attachment, AuditLog, AudienceGroup, AuthSession, Channel, ChannelLink, Delivery, Occurrence, PaymentLink, Receipt, RecurringPayment, User, uid, utcnow
 from app.notifications import telegram_call, validate_webhook
 from app.payment_access import router as payment_access_router
-from app.receipts import receipt_html
+from app.presentation.receipts import receipt_html
 from app.schemas import ChannelIn, GroupIn, LinkIn, LoginIn, OccurrencePatch, RecurringIn, UserIn, UserPatch
-from app.security import admin_user, current_user, hash_password, token_hash, verify_password
-from app.services import audit, confirm_occurrence, create_payment, generate_occurrences, occurrence_out, queue_event, stop_payment, summarize
 
 
 @asynccontextmanager
@@ -250,7 +250,7 @@ def budget(year: int = Query(default_factory=lambda: today().year, ge=2000, le=2
 
 @app.get(prefix + '/channels', tags=['Notifications'])
 def channels(user: User = Depends(admin_user), db: Session = Depends(get_db)):
-    return [{**public(row), 'config': {k: v for k, v in row.config.items() if k != 'secret'}, 'has_secret': bool(row.config.get('secret'))} for row in db.scalars(select(Channel).order_by(Channel.name))]
+    return [{**public(row, ('config', 'connected_at')), 'config': {k: v for k, v in row.config.items() if k != 'secret'}, 'has_secret': bool(row.config.get('secret'))} for row in db.scalars(select(Channel).order_by(Channel.name))]
 
 
 def check_channel(data: ChannelIn):
@@ -271,9 +271,14 @@ def add_channel(data: ChannelIn, user: User = Depends(admin_user), db: Session =
     row = Channel(**data.model_dump())
     db.add(row)
     db.flush()
+    if data.kind == 'telegram' and not data.config.get('chat_id'):
+        # An unlinked Telegram channel is not a delivery target yet. Its
+        # watermark is set when the chat is actually connected.
+        row.connected_at = None
+        db.flush()
     audit(db, user.login, 'channel.created', row.id, kind=row.kind, name=row.name)
     db.commit()
-    return public(row, ('config',))
+    return public(row, ('config', 'connected_at'))
 
 
 @app.patch(prefix + '/channels/{channel_id}', tags=['Notifications'])
@@ -289,9 +294,15 @@ def update_channel(channel_id: str, data: ChannelIn, user: User = Depends(admin_
         # A replacement recipient must not inherit old email capabilities.
         db.execute(delete(PaymentLink).where(PaymentLink.channel_id == row.id))
     row.name, row.kind, row.config, row.active = data.name, data.kind, config, data.active
+    if row.kind == 'telegram' and not row.config.get('chat_id'):
+        # Removing a chat disconnects the target; the next chat link starts a
+        # fresh delivery boundary.
+        row.connected_at = None
+    elif row.connected_at is None:
+        row.connected_at = utcnow()
     audit(db, user.login, 'channel.updated', row.id)
     db.commit()
-    return public(row, ('config',))
+    return public(row, ('config', 'connected_at'))
 
 
 @app.post(prefix + '/channels/{channel_id}/telegram-link', tags=['Notifications'])

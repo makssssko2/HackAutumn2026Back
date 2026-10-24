@@ -6,13 +6,13 @@ from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from fastapi import HTTPException
 from sqlalchemy import delete, select
 
-from app.bootstrap import bootstrap
-from app.config import settings
-from app.db import SessionLocal
+from app.core.bootstrap import bootstrap
+from app.core.config import settings
+from app.core.db import SessionLocal
+from app.domain.services import audit, confirm_occurrence
 from app.models import Channel, ChannelLink, Delivery, Occurrence, Receipt, utcnow
 from app.notifications import telegram_buttons
-from app.receipts import receipt_html
-from app.services import audit, confirm_occurrence
+from app.presentation.receipts import receipt_html
 from app.bot_interactions import open_action, handle_action as handle_date_action
 
 dispatcher = Dispatcher()
@@ -60,6 +60,7 @@ async def connect_chat(message: Message, bot: Bot, token: str):
             return
         channel.config = {**channel.config, 'chat_id': str(message.chat.id)}
         channel.active = True
+        channel.connected_at = utcnow()
         audit(db, f'telegram:{message.from_user.id}', 'channel.connected', channel.id, chat_id=str(message.chat.id))
         db.commit()
     await message.answer('Чат подключен. Здесь будут появляться счета и напоминания.')

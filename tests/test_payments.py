@@ -140,6 +140,139 @@ def test_reminders_late_creation_paid_and_no_duplicates(admin, db_factory):
         assert len(list(db.scalars(select(Delivery).where(Delivery.occurrence_id == row['id'])))) == before
 
 
+def test_prepare_reminders_does_not_burst_old_periods(admin, db_factory):
+    payment = create(admin, first_due_date=str(today() - timedelta(days=65)))
+    with db_factory() as db:
+        before = {
+            (delivery.occurrence_id, delivery.event)
+            for delivery in db.scalars(select(Delivery))
+        }
+        prepare_reminders(db)
+        db.commit()
+        new_reminders = {
+            (delivery.occurrence_id, delivery.event)
+            for delivery in db.scalars(select(Delivery))
+        } - before
+        old_occurrence_ids = {
+            occurrence.id
+            for occurrence in db.scalars(select(Occurrence).where(
+                Occurrence.recurring_id == payment['id'],
+                Occurrence.due_date < today() - timedelta(days=3),
+            ))
+        }
+        assert not any(
+            occurrence_id in old_occurrence_ids and event == 'reminder'
+            for occurrence_id, event in new_reminders
+        )
+
+
+def test_prepare_reminders_skips_periods_older_than_the_three_day_window(db_factory):
+    with db_factory() as db:
+        expired_payment = RecurringPayment(title='Expired', amount=Decimal('10'), currency='RUB', first_due_date=today() - timedelta(days=4), frequency='yearly')
+        upcoming_payment = RecurringPayment(title='Upcoming', amount=Decimal('10'), currency='RUB', first_due_date=today() + timedelta(days=3), frequency='yearly')
+        db.add_all([expired_payment, upcoming_payment])
+        db.flush()
+        expired = Occurrence(recurring_id=expired_payment.id, title=expired_payment.title, amount=expired_payment.amount, currency=expired_payment.currency, due_date=expired_payment.first_due_date)
+        upcoming = Occurrence(recurring_id=upcoming_payment.id, title=upcoming_payment.title, amount=upcoming_payment.amount, currency=upcoming_payment.currency, due_date=upcoming_payment.first_due_date)
+        db.add_all([expired, upcoming])
+        db.flush()
+
+        prepare_reminders(db)
+
+        reminder_ids = set(db.scalars(select(Delivery.occurrence_id).where(Delivery.event == 'reminder')))
+        assert expired.id not in reminder_ids
+        assert upcoming.id in reminder_ids
+
+
+def test_late_payment_creation_queues_created_event_instead_of_reminder(db_factory):
+    with db_factory() as db:
+        payment = create_payment(db, RecurringIn(title='Late', amount='10', currency='RUB', first_due_date=today() - timedelta(days=1)), 'admin')
+
+        occurrence = db.scalar(select(Occurrence).where(Occurrence.recurring_id == payment.id))
+        events = set(db.scalars(select(Delivery.event).where(Delivery.occurrence_id == occurrence.id)))
+        assert events == {'created'}
+
+
+def test_new_channel_does_not_receive_events_for_older_occurrence(admin, db_factory):
+    payment = create(admin)
+    row = first(admin, payment)
+    with db_factory() as db:
+        db.get(Occurrence, row['id']).created_at = utcnow() - timedelta(days=1)
+        db.commit()
+
+    channel = admin.post('/api/v1/channels', json={
+        'name': 'New email', 'kind': 'email', 'config': {'email': 'new@example.com'},
+    }).json()
+
+    with db_factory() as db:
+        prepare_reminders(db)
+        db.commit()
+        assert db.scalar(select(Delivery.id).where(
+            Delivery.occurrence_id == row['id'], Delivery.channel_id == channel['id'],
+        )) is None
+
+    assert admin.patch('/api/v1/payment-occurrences/' + row['id'], json={'paid': True}).status_code == 200
+    with db_factory() as db:
+        assert db.scalar(select(Delivery.id).where(
+            Delivery.occurrence_id == row['id'], Delivery.channel_id == channel['id'],
+        )) is None
+
+
+def test_channel_connected_before_occurrence_receives_it(admin, db_factory):
+    channel = admin.post('/api/v1/channels', json={
+        'name': 'Email', 'kind': 'email', 'config': {'email': 'billing@example.com'},
+    }).json()
+    payment = create(admin)
+    row = first(admin, payment)
+
+    with db_factory() as db:
+        delivery = db.scalar(select(Delivery).where(
+            Delivery.occurrence_id == row['id'], Delivery.channel_id == channel['id'],
+        ))
+        assert delivery is not None and delivery.event == 'reminder'
+
+
+def test_backfilled_channel_keeps_historical_delivery_behavior(db_factory):
+    with db_factory() as db:
+        payment = create_payment(db, RecurringIn(title='Historical', amount='10', currency='RUB', first_due_date=today()), 'admin')
+        occurrence = db.scalar(select(Occurrence).where(Occurrence.recurring_id == payment.id))
+        legacy = Channel(
+            name='Legacy email', kind='email', config={'email': 'legacy@example.com'},
+            connected_at=utcnow() - timedelta(days=3650),
+        )
+        db.add(legacy)
+        db.commit()
+
+        prepare_reminders(db)
+        db.commit()
+
+        assert db.scalar(select(Delivery.id).where(
+            Delivery.occurrence_id == occurrence.id, Delivery.channel_id == legacy.id,
+        )) is not None
+
+
+def test_unlinked_telegram_channel_is_not_a_delivery_target(admin, db_factory):
+    payment = create(admin)
+    row = first(admin, payment)
+    channel = admin.post('/api/v1/channels', json={'name': 'Telegram', 'kind': 'telegram'}).json()
+
+    with db_factory() as db:
+        assert db.get(Channel, channel['id']).connected_at is None
+        prepare_reminders(db)
+        db.commit()
+        assert db.scalar(select(Delivery.id).where(
+            Delivery.occurrence_id == row['id'], Delivery.channel_id == channel['id'],
+        )) is None
+
+
+def test_channel_api_hides_internal_connection_watermark(admin):
+    created = admin.post('/api/v1/channels', json={
+        'name': 'Hidden watermark', 'kind': 'email', 'config': {'email': 'hidden@example.com'},
+    }).json()
+    assert 'connected_at' not in created
+    assert all('connected_at' not in row for row in admin.get('/api/v1/channels').json())
+
+
 def test_stopping_preserves_history_and_stops_future_generation(admin, db_factory):
     payment = create(admin, first_due_date=str(today() - timedelta(days=40)))
     assert admin.delete('/api/v1/recurring-payments/' + payment['id']).status_code == 200

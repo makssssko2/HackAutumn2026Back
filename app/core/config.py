@@ -1,0 +1,38 @@
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file='.env', extra='ignore')
+    app_name: str = 'Invoice Keeper'
+    database_url: str = 'sqlite:///./data/invoice-keeper.db'
+    admin_login: str = 'admin'
+    admin_password: str = 'change-me-before-use'
+    app_timezone: str = 'Europe/Moscow'
+    frontend_origin: str = 'http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080,http://127.0.0.1:8080'
+    cookie_secure: bool = False
+    telegram_bot_token: str = ''
+    smtp_host: str = ''
+    smtp_port: int = 587
+    smtp_username: str = ''
+    smtp_password: str = ''
+    smtp_from: str = 'invoice-keeper@localhost'
+    smtp_starttls: bool = True
+    smtp_ssl: bool = False
+    worker_interval_seconds: int = 30
+    allow_private_webhooks: bool = False
+    data_dir: Path = Path('data')
+
+    @property
+    def allowed_origins(self):
+        return [origin.strip().rstrip('/') for origin in self.frontend_origin.split(',') if origin.strip()]
+
+
+settings = Settings()
+
+
+def today():
+    return datetime.now(ZoneInfo(settings.app_timezone)).date()

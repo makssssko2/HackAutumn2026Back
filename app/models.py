@@ -5,7 +5,7 @@ from decimal import Decimal
 from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db import Base
+from app.core.db import Base
 
 
 def uid():
@@ -65,6 +65,7 @@ class Occurrence(Base):
     paid_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
     cancelled: Mapped[bool] = mapped_column(Boolean, default=False)
     revision: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class Receipt(Base):
@@ -96,6 +97,7 @@ class Channel(Base):
     kind: Mapped[str] = mapped_column(String(20))
     config: Mapped[dict] = mapped_column(JSON, default=dict)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=True)
 
 
 class AudienceGroup(Base):

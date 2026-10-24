@@ -153,6 +153,29 @@ def test_network_timeout_requires_review_not_blind_retry(db_factory, monkeypatch
         assert delivery.status == 'uncertain' and delivery.attempts == 1
 
 
+def test_smtp_timeout_requires_review_not_retry(db_factory, monkeypatch):
+    import app.notifications as notifications
+    monkeypatch.setattr(notifications, 'SessionLocal', db_factory)
+    with db_factory() as db:
+        row = sample(db)
+        channel = Channel(name='Email', kind='email', config={'email': 'team@example.com'})
+        db.add(channel)
+        db.flush()
+        delivery = Delivery(occurrence_id=row.id, channel_id=channel.id, event='reminder')
+        db.add(delivery)
+        db.commit()
+        delivery_id = delivery.id
+    monkeypatch.setattr(
+        notifications,
+        'send_delivery',
+        lambda *args: (_ for _ in ()).throw(TimeoutError('smtp timeout')),
+    )
+    notifications.process_deliveries()
+    with db_factory() as db:
+        delivery = db.get(Delivery, delivery_id)
+        assert delivery.status == 'uncertain' and delivery.attempts == 1
+
+
 def test_bot_rejects_other_chat_and_confirms_once(db_factory, monkeypatch):
     import app.telegram_bot as telegram
     monkeypatch.setattr(telegram, 'SessionLocal', db_factory)
@@ -180,7 +203,7 @@ def test_connect_code_is_single_use_and_requires_group_admin(db_factory, monkeyp
     answer = AsyncMock()
     monkeypatch.setattr(Message, 'answer', answer)
     with db_factory() as db:
-        channel = Channel(name='Telegram', kind='telegram', config={})
+        channel = Channel(name='Telegram', kind='telegram', config={}, connected_at=None)
         db.add(channel); db.flush()
         db.add(ChannelLink(token='test-code', channel_id=channel.id, expires_at=utcnow() + timedelta(minutes=10)))
         db.commit(); cid = channel.id
@@ -191,8 +214,10 @@ def test_connect_code_is_single_use_and_requires_group_admin(db_factory, monkeyp
     bot.get_chat_member.return_value = SimpleNamespace(status='administrator')
     asyncio.run(telegram.connect(message(text='/connect test-code'), bot))
     with db_factory() as db:
+        connected = db.get(Channel, cid)
         assert db.get(ChannelLink, 'test-code') is None
-        assert db.get(Channel, cid).config['chat_id'] == '-100123'
+        assert connected.config['chat_id'] == '-100123'
+        assert connected.connected_at is not None
 
 
 def test_startgroup_links_existing_bot_without_web_account(db_factory, monkeypatch):
