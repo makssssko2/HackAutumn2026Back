@@ -1,3 +1,6 @@
+import hashlib
+import secrets
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -7,7 +10,7 @@ from app.core.db import get_db
 from app.core.security import admin_user
 from app.domain.services import audit
 from app.integrations.base import IntegrationError, get_adapter
-from app.integrations.security import encrypt_credentials
+from app.integrations.security import decrypt_credentials, encrypt_credentials
 from app.models import IntegrationConnection, IntegrationInbox, User, utcnow
 from app.repositories.base import get_or_404
 from app.repositories.integrations import list_connections
@@ -40,6 +43,7 @@ def providers(user: User = Depends(admin_user)):
     return [
         {'provider': 'vk_teams', 'label': 'VK Teams', 'credentials': ['token'], 'capabilities': ['native_actions', 'message_edit', 'file_upload', 'polling']},
         {'provider': 'mattermost', 'label': 'Mattermost', 'credentials': ['access_token'], 'capabilities': ['native_actions', 'message_edit', 'file_upload', 'callback']},
+        {'provider': 'bitrix24', 'label': 'Bitrix24 Chatbots 2.0', 'credentials': ['webhook_url'], 'capabilities': ['native_actions', 'message_edit', 'file_upload', 'polling', 'setup']},
     ]
 
 
@@ -118,6 +122,41 @@ def validate_connection(connection_id: str, user: User = Depends(admin_user), db
     row.last_error_code = None
     row.last_checked_at = utcnow()
     audit(db, user.login, 'integration.validated', row.id, provider=row.provider)
+    db.commit()
+    return connection_out(row)
+
+
+@router.post('/connections/{connection_id}/setup')
+def setup_connection(connection_id: str, user: User = Depends(admin_user), db: Session = Depends(get_db)):
+    row = get_or_404(db, IntegrationConnection, connection_id)
+    if row.provider != 'bitrix24':
+        raise HTTPException(422, 'Настройка доступна только для Bitrix24')
+    try:
+        credential_values = decrypt_credentials(row.credentials_encrypted)
+        bot_code = str(row.public_config.get('bot_code') or f'ik_{hashlib.sha256(row.id.encode()).hexdigest()[:24]}')
+        if not row.external_bot_id:
+            bot_token = secrets.token_urlsafe(24)
+            adapter = get_adapter(row)
+            row.external_bot_id = adapter.register_bot(row, bot_code, bot_token)
+            credential_values['bot_token'] = bot_token
+            row.credentials_encrypted = encrypt_credentials(credential_values)
+        elif row.public_config.get('bot_name') != row.name:
+            get_adapter(row).update_bot(row)
+        if row.public_config.get('command') != 'confirm':
+            get_adapter(row).register_command(row)
+    except (IntegrationError, ValueError) as error:
+        row.health_status = 'error'
+        row.last_error_code = error.code if isinstance(error, IntegrationError) else 'credentials_invalid'
+        db.commit()
+        detail = {'code': row.last_error_code, 'message': str(error)}
+        raise HTTPException(422, detail) from error
+    row.public_config = {**row.public_config, 'bot_code': bot_code, 'bot_name': row.name, 'command': 'confirm'}
+    row.capabilities = {'native_actions': True, 'message_edit': True, 'file_upload': True, 'polling': True}
+    row.setup_status = 'ready'
+    row.health_status = 'healthy'
+    row.last_error_code = None
+    row.last_checked_at = utcnow()
+    audit(db, user.login, 'integration.setup', row.id, provider=row.provider)
     db.commit()
     return connection_out(row)
 

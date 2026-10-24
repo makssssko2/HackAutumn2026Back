@@ -32,7 +32,7 @@ def channels(user: User = Depends(admin_user), db: Session = Depends(get_db)):
 @router.post('', status_code=201)
 def add_channel(data: ChannelIn, user: User = Depends(admin_user), db: Session = Depends(get_db)):
     check_channel(data)
-    if data.kind in ('vk_teams', 'mattermost'):
+    if data.kind in ('vk_teams', 'mattermost', 'bitrix24'):
         connection = get_or_404(db, IntegrationConnection, data.connection_id)
         if connection.provider != data.kind or not connection.active:
             raise HTTPException(409, 'Интеграция недоступна или не соответствует типу канала')
@@ -53,7 +53,7 @@ def update_channel(channel_id: str, data: ChannelIn, user: User = Depends(admin_
     if row.kind == 'inapp' and (not data.active or data.kind != 'inapp'):
         raise HTTPException(409, 'Внутренние уведомления должны оставаться включены')
     check_channel(data)
-    if data.kind in ('vk_teams', 'mattermost'):
+    if data.kind in ('vk_teams', 'mattermost', 'bitrix24'):
         connection = get_or_404(db, IntegrationConnection, data.connection_id)
         if connection.provider != data.kind or not connection.active:
             raise HTTPException(409, 'Интеграция недоступна или не соответствует типу канала')
