@@ -1,8 +1,6 @@
-# Интеграции VK Teams и Mattermost: подробный разбор
+# Интеграции VK Teams, Mattermost и Bitrix24: подробный разбор
 
-Этот документ описывает фактически реализованную backend-фичу интеграций Invoice Keeper с VK Teams и Mattermost, её жизненный цикл и способ подключения frontend.
-
-Документ не описывает Битрикс24: он остаётся отдельным будущим этапом.
+Этот документ описывает фактически реализованную backend-фичу интеграций Invoice Keeper с VK Teams, Mattermost и Bitrix24, её жизненный цикл и способ подключения frontend.
 
 ## 1. Что делает фича
 
@@ -36,7 +34,7 @@
 `IntegrationConnection` описывает один сервер и одного бота:
 
 ```text
-provider       = vk_teams | mattermost
+provider       = vk_teams | mattermost | bitrix24
 name           = отображаемое имя подключения
 base_url       = URL Bot API или Mattermost server
 credentials    = зашифрованный токен
@@ -51,7 +49,7 @@ server_revision
 `Channel` описывает конкретный чат-получатель:
 
 ```text
-kind           = vk_teams | mattermost
+kind           = vk_teams | mattermost | bitrix24
 connection_id  = IntegrationConnection.id
 remote_chat_id = ID чата у провайдера
 active         = включён ли получатель
@@ -280,6 +278,29 @@ POST {PUBLIC_APP_URL}/api/v1/integrations/mattermost/{connection_id}/actions
 В `props` Mattermost передаются blocks и registry действий. В context кнопки находится action-токен. Backend не доверяет только `user_id` или `channel_id` из JSON, а сверяет их с сохранённым `BotAction`.
 
 Если сервер Mattermost не поддерживает interactive blocks или не может обратиться к callback URL, подключение нельзя считать полностью готовым, даже если обычное сообщение отправляется.
+
+## 5.4. Поддержка Bitrix24 Chatbots 2.0
+
+Bitrix24 использует только `imbot.v2` в режиме `fetch`: CRM, Open Channels, legacy `imbot`, OAuth и публичный callback endpoint не используются.
+
+Создайте connection с portal origin в `base_url` и полным incoming webhook URL со scope `imbot` в write-only credentials:
+
+```json
+{
+  "provider": "bitrix24",
+  "name": "Bitrix24 компании",
+  "base_url": "https://company.bitrix24.ru",
+  "credentials": {
+    "webhook_url": "https://company.bitrix24.ru/rest/1/webhook-code"
+  }
+}
+```
+
+Затем admin вызывает `POST /api/v1/integrations/connections/{connection_id}/setup`. Backend создаёт стабильный bot code, генерирует и шифрует bot token длиной не более 40 символов, регистрирует bot `eventMode: "fetch"` и hidden command `confirm`. Ответы API не возвращают webhook или bot token.
+
+Отдельный runner `python -m app.bitrix24_runner` вызывает `imbot.v2.Event.get` без `offset` при первом запросе и с сохранённым `nextOffset` далее, поэтому fetch wait не задерживает обычный delivery worker. В Docker он запускается сервисом `bitrix-events`. Runner сохраняет `(connection_id, eventId)` и результат обработки до продвижения offset; между страницами `hasMore` выдерживает две секунды. Для `ONIMBOTV2COMMANDADD` принимается только keyboard command `confirm`; `COMMAND_PARAMS` содержит JSON только с opaque action token и mode. Bot ID, dialog ID, message ID, provider, connection и invoice revision проверяются перед общим `confirm_occurrence`.
+
+Для `bitrix24` channel `remote_chat_id` должен быть Bitrix dialog ID, например `chat123` для группового чата. Отправка использует `Chat.Message.send`/`Chat.Message.update`; после оплаты worker загружает HTML-чек через `File.upload` (лимит Bitrix24 100 MB, приложение генерирует существенно меньший файл).
 
 ## 6. Backend API для frontend
 
