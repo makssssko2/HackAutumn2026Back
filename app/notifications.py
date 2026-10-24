@@ -16,7 +16,9 @@ from sqlalchemy import select, update
 from app.core.config import settings
 from app.core.db import SessionLocal
 from app.domain.services import occurrence_out, prepare_reminders
-from app.models import Channel, Delivery, Occurrence, RecurringPayment, utcnow
+from app.integrations.actions import create_actions, handle_callback
+from app.integrations.base import IntegrationError, get_adapter
+from app.models import BotAction, Channel, Delivery, IntegrationConnection, IntegrationInbox, Occurrence, Receipt, RecurringPayment, utcnow
 from app.presentation.message_templates import email_html, telegram_message
 from app.payment_access import email_payment_url
 
@@ -125,6 +127,35 @@ def send_delivery(db, delivery: Delivery, channel: Channel, row: Occurrence):
             if not 200 <= response.status_code < 300:
                 raise ValueError(f'Webhook вернул HTTP {response.status_code}')
         return None
+    if channel.kind in ('vk_teams', 'mattermost'):
+        connection = db.get(IntegrationConnection, channel.connection_id)
+        if not connection or not connection.active:
+            raise IntegrationError('connection_unavailable', 'Интеграция отключена')
+        adapter = get_adapter(connection)
+        actions = create_actions(db, delivery, channel, row)
+        previous = list(db.scalars(select(Delivery).where(
+            Delivery.occurrence_id == row.id,
+            Delivery.channel_id == channel.id,
+            Delivery.remote_message_id.is_not(None),
+        )))
+        if delivery.event.startswith('state:') and previous:
+            result = adapter.update_invoice(connection, channel.remote_chat_id or '', previous[0].remote_message_id, text, actions)
+        else:
+            result = adapter.send_invoice(connection, channel.remote_chat_id or '', text, actions)
+        for action in list(db.scalars(select(BotAction).where(BotAction.delivery_id == delivery.id))):
+            action.message_id = result.message_id
+        if row.paid:
+            receipt = db.scalar(select(Receipt).where(Receipt.occurrence_id == row.id, Receipt.voided.is_(False)).order_by(Receipt.created_at.desc()))
+            if receipt:
+                from app.presentation.receipts import receipt_html
+                adapter.send_file(
+                    connection,
+                    channel.remote_chat_id or '',
+                    f'{receipt.number}.html',
+                    receipt_html(receipt, row, description).encode('utf-8'),
+                    'Демонстрационный чек',
+                )
+        return result.message_id
     raise ValueError('Неизвестный канал')
 
 
@@ -165,8 +196,59 @@ def process_deliveries(limit=100):
             db.commit()
 
 
+def poll_vk_teams():
+    with SessionLocal() as db:
+        connections = list(db.scalars(select(IntegrationConnection).where(
+            IntegrationConnection.provider == 'vk_teams',
+            IntegrationConnection.active.is_(True),
+        )))
+        for connection in connections:
+            from app.integrations.base import get_adapter
+            adapter = get_adapter(connection)
+            try:
+                try:
+                    last_event_id = int(connection.server_revision) if connection.server_revision else None
+                except ValueError:
+                    last_event_id = None
+                events = adapter.poll(connection, last_event_id=last_event_id)
+                for event in events:
+                    external_id = str(event.get('eventId') or event.get('event_id') or event.get('id') or '')
+                    if not external_id:
+                        continue
+                    duplicate = db.scalar(select(IntegrationInbox.id).where(
+                        IntegrationInbox.connection_id == connection.id,
+                        IntegrationInbox.external_event_id == external_id,
+                    ))
+                    if duplicate:
+                        continue
+                    inbox = IntegrationInbox(
+                        connection_id=connection.id,
+                        external_event_id=external_id,
+                        event_type=str(event.get('type') or 'unknown'),
+                        payload=event,
+                    )
+                    db.add(inbox)
+                    try:
+                        callback = adapter.parse_callback(event)
+                        result = handle_callback(db, connection, callback)
+                        inbox.result = result
+                    except Exception as error:
+                        inbox.result = {'error': type(error).__name__}
+                    inbox.processed_at = utcnow()
+                    connection.server_revision = external_id
+                    connection.last_event_at = utcnow()
+                connection.health_status = 'healthy'
+                connection.last_error_code = None
+            except Exception as error:
+                connection.health_status = 'error'
+                connection.last_error_code = type(error).__name__
+                logger.warning('VK Teams polling failed for %s (%s)', connection.id, type(error).__name__)
+            db.commit()
+
+
 def tick():
     with SessionLocal() as db:
         prepare_reminders(db)
         db.commit()
     process_deliveries()
+    poll_vk_teams()
