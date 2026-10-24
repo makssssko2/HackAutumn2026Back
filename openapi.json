@@ -2,10 +2,142 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Invoice Keeper API",
-    "description": "Учет регулярных расходов и уведомления. Веб-панель и HTTP API доступны только администратору. Участники подтверждают демонстрационную оплату в Telegram без веб-аккаунта.",
+    "description": "Учет регулярных расходов и уведомления. Веб-панель и HTTP API доступны только администратору. Участники подтверждают демонстрационную оплату в Telegram или по приватной ссылке одного счета из письма, без веб-аккаунта.",
     "version": "1.0.0"
   },
   "paths": {
+    "/api/v1/public/payments/{token}": {
+      "get": {
+        "tags": [
+          "Recipient payment"
+        ],
+        "summary": "Get Payment",
+        "operationId": "get_payment_api_v1_public_payments__token__get",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/public/payments/{token}/confirm": {
+      "post": {
+        "tags": [
+          "Recipient payment"
+        ],
+        "summary": "Confirm Payment",
+        "operationId": "confirm_payment_api_v1_public_payments__token__confirm_post",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaymentConfirmation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/public/payments/{token}/receipt": {
+      "get": {
+        "tags": [
+          "Recipient payment"
+        ],
+        "summary": "Get Receipt",
+        "operationId": "get_receipt_api_v1_public_payments__token__receipt_get",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "tags": [
@@ -1626,6 +1758,32 @@
         },
         "type": "object",
         "title": "OccurrencePatch"
+      },
+      "PaymentConfirmation": {
+        "properties": {
+          "paid_at": {
+            "type": "string",
+            "format": "date",
+            "title": "Paid At"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Expected Revision"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Name",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "paid_at",
+          "expected_revision"
+        ],
+        "title": "PaymentConfirmation"
       },
       "RecurringIn": {
         "properties": {

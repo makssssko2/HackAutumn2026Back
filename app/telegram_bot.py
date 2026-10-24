@@ -2,7 +2,7 @@ import asyncio
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from fastapi import HTTPException
 from sqlalchemy import delete, select
 
@@ -13,6 +13,7 @@ from app.models import Channel, ChannelLink, Delivery, Occurrence, Receipt, utcn
 from app.notifications import telegram_buttons
 from app.receipts import receipt_html
 from app.services import audit, confirm_occurrence
+from app.bot_interactions import open_action, handle_action as handle_date_action
 
 dispatcher = Dispatcher()
 
@@ -77,6 +78,16 @@ def allowed_occurrence(db, query: CallbackQuery, occurrence_id: str):
 
 @dispatcher.callback_query(F.data)
 async def handle_action(query: CallbackQuery, bot: Bot):
+    if query.data == 'noop':
+        await query.answer()
+        return
+    if (query.data or '').split(':')[0] in ('bc', 'bm', 'bd', 'bn'):
+        if not isinstance(query.message, Message):
+            await query.answer('Сообщение недоступно')
+            return
+        with SessionLocal() as db:
+            await handle_date_action(db, query, bot, allowed_occurrence)
+        return
     parts = (query.data or '').split(':')
     if len(parts) < 2:
         await query.answer('Неизвестное действие')
@@ -99,13 +110,14 @@ async def handle_action(query: CallbackQuery, bot: Bot):
         if row.cancelled:
             await query.answer('Счет отменен', show_alert=True)
             return
+        if action in ('date', 'undo', 'pay'):
+            if action == 'pay' and row.paid or action == 'undo' and not row.paid:
+                await query.answer('Статус счета уже изменен', show_alert=True)
+                return
+            await open_action(db, query, bot, row, action)
+            return
         if row.paid:
             await query.answer('Счет уже оплачен', show_alert=True)
-            return
-        if action == 'pay':
-            await query.answer()
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='Подтвердить демооплату', callback_data=f'confirm:{row.id}:{query.from_user.id}')]])
-            await bot.send_message(query.message.chat.id, f'{query.from_user.full_name}, подтвердите демонстрационную оплату:\n{row.title}\n{row.amount:.2f} {row.currency}\n\nДенежные средства не списываются.', reply_markup=keyboard)
             return
         if action == 'confirm' and (len(parts) != 3 or parts[2] != str(query.from_user.id)):
             await query.answer('Подтверждение предназначено другому участнику', show_alert=True)

@@ -20,8 +20,9 @@ from sqlalchemy.orm import Session
 from app.bootstrap import bootstrap
 from app.config import settings, today
 from app.db import Base, engine, get_db
-from app.models import Attachment, AuditLog, AudienceGroup, AuthSession, Channel, ChannelLink, Delivery, Occurrence, Receipt, RecurringPayment, User, uid, utcnow
+from app.models import Attachment, AuditLog, AudienceGroup, AuthSession, Channel, ChannelLink, Delivery, Occurrence, PaymentLink, Receipt, RecurringPayment, User, uid, utcnow
 from app.notifications import telegram_call, validate_webhook
+from app.payment_access import router as payment_access_router
 from app.receipts import receipt_html
 from app.schemas import ChannelIn, GroupIn, LinkIn, LoginIn, OccurrencePatch, RecurringIn, UserIn, UserPatch
 from app.security import admin_user, current_user, hash_password, token_hash, verify_password
@@ -35,8 +36,9 @@ async def lifespan(app):
     yield
 
 
-app = FastAPI(title='Invoice Keeper API', version='1.0.0', description='Учет регулярных расходов и уведомления. Веб-панель и HTTP API доступны только администратору. Участники подтверждают демонстрационную оплату в Telegram без веб-аккаунта.', lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title='Invoice Keeper API', version='1.0.0', description='Учет регулярных расходов и уведомления. Веб-панель и HTTP API доступны только администратору. Участники подтверждают демонстрационную оплату в Telegram или по приватной ссылке одного счета из письма, без веб-аккаунта.', lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.add_middleware(CORSMiddleware, allow_origins=settings.allowed_origins, allow_credentials=True, allow_methods=['GET', 'POST', 'PATCH', 'DELETE'], allow_headers=['Content-Type'])
+app.include_router(payment_access_router)
 prefix = '/api/v1'
 login_attempts = defaultdict(list)
 
@@ -49,7 +51,7 @@ async def protect_origins(request: Request, call_next):
     response = await call_next(request)
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['Cache-Control'] = 'no-store'
-    response.headers['Referrer-Policy'] = 'same-origin'
+    response.headers['Referrer-Policy'] = 'no-referrer' if '/public/payments/' in request.url.path else 'same-origin'
     return response
 
 
@@ -283,6 +285,9 @@ def update_channel(channel_id: str, data: ChannelIn, user: User = Depends(admin_
     config = data.config.copy()
     if row.kind == data.kind == 'webhook' and 'secret' not in config and row.config.get('secret'):
         config['secret'] = row.config['secret']
+    if row.kind == 'email' and (data.kind != 'email' or config.get('email') != row.config.get('email')):
+        # A replacement recipient must not inherit old email capabilities.
+        db.execute(delete(PaymentLink).where(PaymentLink.channel_id == row.id))
     row.name, row.kind, row.config, row.active = data.name, data.kind, config, data.active
     audit(db, user.login, 'channel.updated', row.id)
     db.commit()

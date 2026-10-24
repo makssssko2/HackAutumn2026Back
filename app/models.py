@@ -136,3 +136,24 @@ class ChannelLink(Base):
     token: Mapped[str] = mapped_column(String(64), primary_key=True)
     channel_id: Mapped[str] = mapped_column(ForeignKey('channels.id'))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class PaymentLink(Base):
+    __tablename__ = 'payment_links'
+    token: Mapped[str] = mapped_column(String(64), primary_key=True)
+    delivery_id: Mapped[str] = mapped_column(ForeignKey('deliveries.id'), unique=True)
+    occurrence_id: Mapped[str] = mapped_column(ForeignKey('payment_occurrences.id'))
+    channel_id: Mapped[str] = mapped_column(ForeignKey('channels.id'))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class BotAction(Base):
+    __tablename__ = 'bot_actions'
+    token: Mapped[str] = mapped_column(String(32), primary_key=True)
+    occurrence_id: Mapped[str] = mapped_column(ForeignKey('payment_occurrences.id'))
+    chat_id: Mapped[str] = mapped_column(String(40))
+    user_id: Mapped[str] = mapped_column(String(40))
+    mode: Mapped[str] = mapped_column(String(16))
+    revision: Mapped[int] = mapped_column(Integer)
+    selected_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

@@ -16,6 +16,8 @@ from sqlalchemy import or_, select, update
 from app.config import settings
 from app.db import SessionLocal
 from app.models import Channel, Delivery, Occurrence, RecurringPayment, utcnow
+from app.message_templates import email_html, telegram_message
+from app.payment_access import email_payment_url
 from app.services import occurrence_out, prepare_reminders
 
 logger = logging.getLogger(__name__)
@@ -63,8 +65,11 @@ def telegram_buttons(row: Occurrence):
     if row.cancelled:
         return {'inline_keyboard': []}
     if row.paid:
-        return {'inline_keyboard': [[{'text': 'Демонстрационный чек', 'callback_data': f'receipt:{row.id}'}]]}
-    return {'inline_keyboard': [[{'text': 'Оплатить', 'callback_data': f'pay:{row.id}'}], [{'text': 'Уже оплачено', 'callback_data': f'mark:{row.id}'}]]}
+        return {'inline_keyboard': [[{'text': 'Скачать чек', 'callback_data': f'receipt:{row.id}', 'style': 'primary'}],
+                                   [{'text': 'Исправить дату оплаты', 'callback_data': f'date:{row.id}'}],
+                                   [{'text': 'Отменить отметку', 'callback_data': f'undo:{row.id}', 'style': 'danger'}]]}
+    return {'inline_keyboard': [[{'text': 'Оплатить', 'callback_data': f'pay:{row.id}', 'style': 'success'}],
+                               [{'text': 'Оплачено ранее · выбрать дату', 'callback_data': f'date:{row.id}'}]]}
 
 
 def send_delivery(db, delivery: Delivery, channel: Channel, row: Occurrence):
@@ -72,15 +77,16 @@ def send_delivery(db, delivery: Delivery, channel: Channel, row: Occurrence):
     if channel.kind == 'inapp':
         return None
     if channel.kind == 'telegram':
+        text = telegram_message(row, delivery.event)
         chat_id = channel.config.get('chat_id')
         if not chat_id:
             raise ValueError('Telegram-чат еще не привязан')
         previous = list(db.scalars(select(Delivery).where(Delivery.occurrence_id == row.id, Delivery.channel_id == channel.id, Delivery.remote_message_id.is_not(None))))
         if delivery.event.startswith('state:') and previous:
             for message_id in sorted({item.remote_message_id for item in previous}):
-                telegram_call('editMessageText', {'chat_id': chat_id, 'message_id': int(message_id), 'text': text, 'reply_markup': telegram_buttons(row)})
+                telegram_call('editMessageText', {'chat_id': chat_id, 'message_id': int(message_id), 'text': text, 'parse_mode': 'HTML', 'reply_markup': telegram_buttons(row)})
             return previous[0].remote_message_id
-        result = telegram_call('sendMessage', {'chat_id': chat_id, 'text': text, 'reply_markup': telegram_buttons(row)})
+        result = telegram_call('sendMessage', {'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML', 'reply_markup': telegram_buttons(row)})
         return str(result['message_id'])
     if channel.kind == 'email':
         if not settings.smtp_host:
@@ -90,7 +96,12 @@ def send_delivery(db, delivery: Delivery, channel: Channel, row: Occurrence):
         message['From'] = settings.smtp_from
         message['To'] = channel.config['email']
         message['Message-ID'] = f'<{delivery.id}@invoice-keeper.local>'
-        message.set_content(text)
+        url = email_payment_url(db, delivery, channel, row)
+        # Persist the capability before SMTP can deliver it, including a crash
+        # after the remote server accepts the message.
+        db.commit()
+        message.set_content(text + '\n\nОплатить или посмотреть счет: ' + url + '\nДемонстрационный режим, без списания средств.')
+        message.add_alternative(email_html(row, delivery.event, url), subtype='html')
         context = ssl.create_default_context()
         factory = smtplib.SMTP_SSL if settings.smtp_ssl else smtplib.SMTP
         options = {'context': context} if settings.smtp_ssl else {}

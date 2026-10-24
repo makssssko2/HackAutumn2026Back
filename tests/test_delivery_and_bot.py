@@ -128,6 +128,12 @@ def test_smtp_adapter_uses_configured_recipient_and_message_id(db_factory, monke
         assert bool(captured.get('tls')) is not implicit_ssl
         assert captured['message']['To'] == 'team@example.com'
         assert delivery.id in captured['message']['Message-ID']
+        message = captured['message']
+        assert message.is_multipart()
+        assert 'Оплатить счет' in message.get_body(preferencelist=('html',)).get_content()
+        assert '/pay/' in message.get_body(preferencelist=('plain',)).get_content()
+        from app.models import PaymentLink
+        assert db.scalar(select(PaymentLink).where(PaymentLink.delivery_id == delivery.id)) is not None
 
 
 def test_network_timeout_requires_review_not_blind_retry(db_factory, monkeypatch):
