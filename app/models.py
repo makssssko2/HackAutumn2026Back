@@ -213,3 +213,6 @@ class IntegrationInbox(Base):
     result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+import app.models_b2b  # noqa: E402,F401

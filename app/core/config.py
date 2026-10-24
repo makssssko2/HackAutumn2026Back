@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 from ipaddress import ip_address
 from urllib.parse import urlsplit
 
-from pydantic import field_validator
+from pydantic import model_validator, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,6 +32,29 @@ class Settings(BaseSettings):
     data_dir: Path = Path('data')
     public_app_url: str = 'http://localhost:8000'
     integrations_encryption_key: str = ''
+    b2b_enabled: bool = False
+    b2b_api_key_pepper: str = ''
+    b2b_document_max_bytes: int = 10 * 1024 * 1024
+    b2b_document_max_files: int = 5
+    b2b_document_max_total_bytes: int = 30 * 1024 * 1024
+    b2b_storage_path: Path | None = None
+    b2b_clamav_enabled: bool = False
+    b2b_clamav_host: str = ''
+    b2b_clamav_port: int = 3310
+    b2b_idempotency_ttl_days: int = 7
+
+    @model_validator(mode='after')
+    def validate_b2b_settings(self):
+        if self.b2b_enabled and not self.b2b_api_key_pepper:
+            raise ValueError('B2B_API_KEY_PEPPER is required when B2B_ENABLED=true')
+        if self.b2b_enabled and self.b2b_clamav_enabled and not self.b2b_clamav_host:
+            raise ValueError('B2B_CLAMAV_HOST is required when ClamAV is enabled')
+        if self.b2b_clamav_enabled and not 1 <= self.b2b_clamav_port <= 65535:
+            raise ValueError('B2B_CLAMAV_PORT must be between 1 and 65535')
+        if self.b2b_enabled and (self.b2b_document_max_bytes <= 0 or self.b2b_document_max_files <= 0
+                                 or self.b2b_document_max_total_bytes <= 0 or self.b2b_idempotency_ttl_days <= 0):
+            raise ValueError('B2B document and idempotency limits must be positive when B2B is enabled')
+        return self
 
     @field_validator('public_frontend_url')
     @classmethod
@@ -52,6 +75,10 @@ class Settings(BaseSettings):
     @property
     def allowed_origins(self):
         return [origin.strip().rstrip('/') for origin in self.frontend_origin.split(',') if origin.strip()]
+
+    @property
+    def incoming_invoice_storage_dir(self):
+        return self.b2b_storage_path or self.data_dir / 'incoming-invoices'
 
 
 settings = Settings()
