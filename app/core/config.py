@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     worker_interval_seconds: int = 30
     allow_private_webhooks: bool = False
     data_dir: Path = Path('data')
+    public_app_url: str = 'http://localhost:8000'
+    integrations_encryption_key: str = ''
 
     @property
     def allowed_origins(self):
