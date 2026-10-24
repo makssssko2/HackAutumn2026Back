@@ -123,6 +123,18 @@ Sign in as admin → connect Telegram → use **Выставить счет** an
 
 Telegram/SMTP live delivery needs user-provided credentials. Without them, the admin panel and delivery journal work, but participant payment through Telegram requires configuring and starting the bot. GitHub: https://github.com/makssssko2/HackAutumn2026Back. Deployment: https://aezainvoice.xxxmgxxx.com. Environment files remain ignored.
 
+## Public read-only invoice view
+
+`/invoice/:token` opens one specific occurrence without a web account. Its separate API, `GET /api/v1/public/invoices/{token}`, returns only title, description, amount/currency, payment type, due date, status, actual payment date and delay. It never exposes payer identifiers, other invoices, audit/delivery data, documents, receipts or payment links. No write operation accepts a view token; `/pay/:token` retains its existing separate payment capability.
+
+Configure `PUBLIC_FRONTEND_URL` as the public HTTPS origin (HTTP is accepted only for loopback development) and set `PUBLIC_INVOICE_VIEW_ENABLED=true` **after** deploying the public frontend route. The default is false. This explicit base URL is independent of the CORS origin list and incoming Host headers. Telegram gains a final **Посмотреть счёт** URL button; email gains a secondary read-only link while preserving its payment action; signed webhook payloads gain `view_url`. Existing message contents/callbacks and delivery deduplication remain in place.
+
+Migration `0007` adds a unique, random 256-bit view capability per occurrence. It is created atomically and committed before the external send. Retries and status edits use the same URL. Each new period has a different URL. Links work until explicitly revoked, remain readable after payment/cancellation and do not depend on channel activation. Revocation is a service operation: `app.repositories.invoice_view_links.revoke_view_link(db, occurrence_id)` followed by the caller's commit; sending never silently recreates a revoked link. Disabling the feature stops new links in deliveries but existing non-revoked views continue working.
+
+Public API/HTML use no-store, no-referrer and noindex headers. Uvicorn redacts view paths including query strings; the Front Nginx access log omits public view/API paths. The checked-in Caddyfile does not enable access logging; any independently enabled proxy logging must also suppress capability paths. GET, link scanners and previews never mutate invoices. The frontend refreshes manually and on return to the visible tab, announces refresh results accessibly, and identifies stale data after network failures.
+
+Roll out backend/migration with the feature disabled, then Front/proxy, then enable the flag and recreate API/worker/bot. No historical mass resend is needed; old Telegram messages gain the button during normal state edits, while previously delivered email remains unchanged. Files/receipts remain in their existing authenticated/payment channels.
+
 ## Email invoice actions
 
 SMTP messages contain both a plain-text fallback and responsive HTML in the orange/peach palette. The **Оплатить счет** button opens `/pay/:token`, without an account or admin-panel access. `FRONTEND_ORIGIN` must list the public HTTPS origin first, because it is used for email links.

@@ -36,9 +36,11 @@ def telegram_message(row, event, description=''):
     return '\n'.join(lines)
 
 
-def email_html(row, event, url, description=''):
+def email_html(row, event, url, description='', view_url=None):
     title, state, amount = escape(row.title), status_label(row, event), amount_label(row)
     description_block = f'<p style="margin:0 0 20px;line-height:1.5;font-size:15px;color:#57524d">{escape(description)}</p>' if description else ''
+    view_block = (f'<p style="margin:20px 0 0"><a href="{escape(view_url, quote=True)}" style="color:#a44900">Посмотреть счёт</a> · только просмотр, без входа</p>' if view_url else '')
+    link_lifetime = ('Ссылка для оплаты действует 90 дней. Ссылка просмотра действует до отзыва.' if view_url else 'Ссылка на счет действует 90 дней.')
     if row.paid:
         caption = f'Оплата подтверждена {row.paid_at:%d.%m.%Y}. Чек доступен на странице счета.'
         button = 'Посмотреть счет и чек'
@@ -68,6 +70,7 @@ def email_html(row, event, url, description=''):
 <table role="presentation" cellspacing="0" cellpadding="0"><tr><td bgcolor="#ff8000" style="border-radius:10px;text-align:center">
 <a href="{escape(url, quote=True)}" style="display:inline-block;padding:16px 24px;color:#202020;text-decoration:none;font-size:16px;font-weight:bold">{button} →</a>
 </td></tr></table>
+{view_block}
 <p style="margin:24px 0 0;font-size:13px;line-height:1.6;color:#63615e">Откроется только этот счет. Вход в панель администратора не требуется. Подтверждение оплаты выполняется отдельной кнопкой.</p>
-</td></tr><tr><td style="padding:22px 8px;font-size:12px;color:#63615e;line-height:1.6">Демонстрационный режим: деньги не списываются, чек не является фискальным.<br>Ссылка на счет действует 90 дней. Не пересылайте ее посторонним.</td></tr>
+</td></tr><tr><td style="padding:22px 8px;font-size:12px;color:#63615e;line-height:1.6">Демонстрационный режим: деньги не списываются, чек не является фискальным.<br>{link_lifetime} Не пересылайте ее посторонним.</td></tr>
 </table></td></tr></table></body></html>'''

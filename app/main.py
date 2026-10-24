@@ -11,9 +11,13 @@ from app.api.auth import login_attempts  # re-exported for tests and legacy impo
 from app.notifications import telegram_call  # re-exported: tests monkeypatch main.telegram_call
 from app.core.bootstrap import bootstrap
 from app.core.config import settings
+from app.core.logging import protect_public_invoice_logs
+from app.api.public_invoices import router as public_invoice_router
 from app.payment_access import router as payment_access_router
 
 __all__ = ['app', 'login_attempts', 'telegram_call']
+
+protect_public_invoice_logs()
 
 
 @asynccontextmanager
@@ -62,12 +66,15 @@ async def protect_origins(request: Request, call_next):
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['Cache-Control'] = 'no-store'
     response.headers['Referrer-Policy'] = (
-        'no-referrer' if '/public/payments/' in request.url.path else 'same-origin'
+        'no-referrer' if '/public/payments/' in request.url.path or '/public/invoices/' in request.url.path else 'same-origin'
     )
+    if request.url.path.startswith('/api/v1/public/invoices/'):
+        response.headers['X-Robots-Tag'] = 'noindex, nofollow'
     return response
 
 
 app.include_router(payment_access_router)
+app.include_router(public_invoice_router)
 app.include_router(system.router)
 app.include_router(auth.router)
 app.include_router(users.router)

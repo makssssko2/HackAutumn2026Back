@@ -152,6 +152,14 @@ class PaymentLink(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class InvoiceViewLink(Base):
+    __tablename__ = 'invoice_view_links'
+    token: Mapped[str] = mapped_column(String(64), primary_key=True)
+    occurrence_id: Mapped[str] = mapped_column(ForeignKey('payment_occurrences.id'), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class BotAction(Base):
     __tablename__ = 'bot_actions'
     token: Mapped[str] = mapped_column(String(32), primary_key=True)

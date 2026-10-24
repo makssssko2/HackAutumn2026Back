@@ -138,6 +138,48 @@
         }
       }
     },
+    "/api/v1/public/invoices/{token}": {
+      "get": {
+        "tags": [
+          "Public invoice view"
+        ],
+        "summary": "Public Invoice",
+        "operationId": "public_invoice_api_v1_public_invoices__token__get",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicInvoiceView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "tags": [
@@ -2119,6 +2161,93 @@
           "name"
         ],
         "title": "ProfilePatch"
+      },
+      "PublicInvoiceView": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "amount": {
+            "type": "string",
+            "title": "Amount"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "RUB",
+              "USD",
+              "EUR"
+            ],
+            "title": "Currency"
+          },
+          "payment_type": {
+            "type": "string",
+            "enum": [
+              "one_time",
+              "recurring"
+            ],
+            "title": "Payment Type"
+          },
+          "due_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Due Date"
+          },
+          "paid": {
+            "type": "boolean",
+            "title": "Paid"
+          },
+          "cancelled": {
+            "type": "boolean",
+            "title": "Cancelled"
+          },
+          "paid_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paid At"
+          },
+          "overdue_days": {
+            "type": "integer",
+            "title": "Overdue Days"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "paid",
+              "unpaid",
+              "overdue",
+              "cancelled"
+            ],
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "description",
+          "amount",
+          "currency",
+          "payment_type",
+          "due_date",
+          "paid",
+          "cancelled",
+          "paid_at",
+          "overdue_days",
+          "status"
+        ],
+        "title": "PublicInvoiceView"
       },
       "RecurringIn": {
         "properties": {

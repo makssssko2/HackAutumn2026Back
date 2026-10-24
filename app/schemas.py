@@ -10,6 +10,20 @@ class LoginIn(BaseModel):
     password: str = Field(min_length=1, max_length=200)
 
 
+class PublicInvoiceView(BaseModel):
+    title: str
+    description: str
+    amount: str
+    currency: Literal['RUB', 'USD', 'EUR']
+    payment_type: Literal['one_time', 'recurring']
+    due_date: date
+    paid: bool
+    cancelled: bool
+    paid_at: date | None
+    overdue_days: int
+    status: Literal['paid', 'unpaid', 'overdue', 'cancelled']
+
+
 class ProfilePatch(BaseModel):
     model_config = ConfigDict(extra='forbid')
 

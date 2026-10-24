@@ -16,6 +16,7 @@ from sqlalchemy import select, update
 from app.core.config import settings
 from app.core.db import SessionLocal
 from app.domain.services import occurrence_out, prepare_reminders
+from app.domain.invoice_views import invoice_view_url
 from app.models import Channel, Delivery, Occurrence, RecurringPayment, utcnow
 from app.presentation.message_templates import email_html, telegram_message
 from app.payment_access import email_payment_url
@@ -62,15 +63,19 @@ def notification_text(row: Occurrence, event: str, description: str = ''):
     return f'{label}\n\n{row.title}{details}\n{row.amount:.2f} {row.currency}\nСрок: {row.due_date:%d.%m.%Y}' + (f'\nОплачено: {row.paid_at:%d.%m.%Y}\nПлательщик: {row.paid_by}' if row.paid else '')
 
 
-def telegram_buttons(row: Occurrence):
+def telegram_buttons(row: Occurrence, view_url: str | None = None):
     if row.cancelled:
-        return {'inline_keyboard': []}
-    if row.paid:
-        return {'inline_keyboard': [[{'text': 'Скачать чек', 'callback_data': f'receipt:{row.id}', 'style': 'primary'}],
+        rows = []
+    elif row.paid:
+        rows = [[{'text': 'Скачать чек', 'callback_data': f'receipt:{row.id}', 'style': 'primary'}],
                                    [{'text': 'Исправить дату оплаты', 'callback_data': f'date:{row.id}'}],
-                                   [{'text': 'Отменить отметку', 'callback_data': f'undo:{row.id}', 'style': 'danger'}]]}
-    return {'inline_keyboard': [[{'text': 'Оплатить', 'callback_data': f'pay:{row.id}', 'style': 'success'}],
-                               [{'text': 'Оплачено ранее · выбрать дату', 'callback_data': f'date:{row.id}'}]]}
+                                   [{'text': 'Отменить отметку', 'callback_data': f'undo:{row.id}', 'style': 'danger'}]]
+    else:
+        rows = [[{'text': 'Оплатить', 'callback_data': f'pay:{row.id}', 'style': 'success'}],
+                [{'text': 'Оплачено ранее · выбрать дату', 'callback_data': f'date:{row.id}'}]]
+    if view_url:
+        rows.append([{'text': 'Посмотреть счёт', 'url': view_url}])
+    return {'inline_keyboard': rows}
 
 
 def send_delivery(db, delivery: Delivery, channel: Channel, row: Occurrence):
@@ -79,6 +84,10 @@ def send_delivery(db, delivery: Delivery, channel: Channel, row: Occurrence):
     text = notification_text(row, delivery.event, description)
     if channel.kind == 'inapp':
         return None
+    view_url = invoice_view_url(db, row.id)
+    if view_url:
+        # Make the stable URL durable before any external service can see it.
+        db.commit()
     if channel.kind == 'telegram':
         text = telegram_message(row, delivery.event, description)
         chat_id = channel.config.get('chat_id')
@@ -87,9 +96,9 @@ def send_delivery(db, delivery: Delivery, channel: Channel, row: Occurrence):
         previous = list(db.scalars(select(Delivery).where(Delivery.occurrence_id == row.id, Delivery.channel_id == channel.id, Delivery.remote_message_id.is_not(None))))
         if delivery.event.startswith('state:') and previous:
             for message_id in sorted({item.remote_message_id for item in previous}):
-                telegram_call('editMessageText', {'chat_id': chat_id, 'message_id': int(message_id), 'text': text, 'parse_mode': 'HTML', 'reply_markup': telegram_buttons(row)})
+                telegram_call('editMessageText', {'chat_id': chat_id, 'message_id': int(message_id), 'text': text, 'parse_mode': 'HTML', 'reply_markup': telegram_buttons(row, view_url)})
             return previous[0].remote_message_id
-        result = telegram_call('sendMessage', {'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML', 'reply_markup': telegram_buttons(row)})
+        result = telegram_call('sendMessage', {'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML', 'reply_markup': telegram_buttons(row, view_url)})
         return str(result['message_id'])
     if channel.kind == 'email':
         if not settings.smtp_host:
@@ -104,7 +113,9 @@ def send_delivery(db, delivery: Delivery, channel: Channel, row: Occurrence):
         # after the remote server accepts the message.
         db.commit()
         message.set_content(text + '\n\nОплатить или посмотреть счет: ' + url + '\nДемонстрационный режим, без списания средств.')
-        message.add_alternative(email_html(row, delivery.event, url, description), subtype='html')
+        if view_url:
+            message.set_content(message.get_content() + '\nПосмотреть счёт: ' + view_url)
+        message.add_alternative(email_html(row, delivery.event, url, description, view_url), subtype='html')
         context = ssl.create_default_context()
         factory = smtplib.SMTP_SSL if settings.smtp_ssl else smtplib.SMTP
         options = {'context': context} if settings.smtp_ssl else {}
@@ -118,7 +129,10 @@ def send_delivery(db, delivery: Delivery, channel: Channel, row: Occurrence):
     if channel.kind == 'webhook':
         url = channel.config['url']
         validate_webhook(url)
-        body = json.dumps({'event_id': delivery.id, 'event': delivery.event, 'payment': occurrence_out(row, payment.payment_type, description)}, default=str, ensure_ascii=False).encode()
+        payload = {'event_id': delivery.id, 'event': delivery.event, 'payment': occurrence_out(row, payment.payment_type, description)}
+        if view_url:
+            payload['view_url'] = view_url
+        body = json.dumps(payload, default=str, ensure_ascii=False).encode()
         signature = hmac.new(channel.config.get('secret', '').encode(), body, hashlib.sha256).hexdigest()
         with httpx.Client(timeout=15, follow_redirects=False) as client:
             response = client.post(url, content=body, headers={'Content-Type': 'application/json', 'X-Invoice-Event-ID': delivery.id, 'X-Invoice-Signature': signature})
