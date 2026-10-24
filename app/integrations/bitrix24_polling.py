@@ -28,6 +28,7 @@ def poll_bitrix24() -> None:
     with SessionLocal() as db:
         connections = list(db.scalars(select(IntegrationConnection).where(
             IntegrationConnection.provider == 'bitrix24', IntegrationConnection.active.is_(True),
+            IntegrationConnection.setup_status == 'ready', IntegrationConnection.external_bot_id.is_not(None),
         )))
         for connection in connections:
             _poll_connection(db, connection)

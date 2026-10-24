@@ -90,7 +90,10 @@ def update_connection(connection_id: str, data: IntegrationConnectionPatch, user
     values = data.model_dump(exclude_unset=True)
     if data.credentials is not None:
         try:
-            row.credentials_encrypted = encrypt_credentials(data.credentials)
+            credential_values = data.credentials
+            if row.provider == 'bitrix24':
+                credential_values = {**decrypt_credentials(row.credentials_encrypted), **data.credentials}
+            row.credentials_encrypted = encrypt_credentials(credential_values)
         except ValueError as error:
             raise HTTPException(503, str(error)) from error
     for key in ('name', 'base_url', 'active'):
@@ -118,7 +121,10 @@ def validate_connection(connection_id: str, user: User = Depends(admin_user), db
     row.external_bot_id = result.get('external_bot_id') or row.external_bot_id
     row.capabilities = result.get('capabilities', {})
     row.health_status = 'healthy'
-    row.setup_status = 'ready'
+    row.setup_status = (
+        'ready' if row.external_bot_id and row.public_config.get('command') == 'confirm'
+        and row.public_config.get('bot_name') == row.name else 'configured'
+    ) if row.provider == 'bitrix24' else 'ready'
     row.last_error_code = None
     row.last_checked_at = utcnow()
     audit(db, user.login, 'integration.validated', row.id, provider=row.provider)
