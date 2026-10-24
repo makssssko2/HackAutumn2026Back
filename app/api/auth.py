@@ -32,10 +32,6 @@ def login(data: LoginIn, request: Request, response: Response, db: Session = Dep
         audit(db, 'anonymous', 'auth.failed', details_login=data.login)
         db.commit()
         raise HTTPException(401, 'Неверный логин или пароль')
-    if user.role != 'admin':
-        audit(db, user.login, 'auth.denied', user.id, reason='admin_only_web')
-        db.commit()
-        raise HTTPException(403, 'Веб-панель доступна только администратору. Используйте уведомления в Telegram.')
     token = secrets.token_urlsafe(48)
     from app.core.config import settings  # noqa: PLC0415
     db.add(AuthSession(token_hash=token_hash(token), user_id=user.id, expires_at=now + timedelta(days=7)))

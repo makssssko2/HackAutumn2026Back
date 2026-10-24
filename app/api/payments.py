@@ -16,7 +16,7 @@ router = APIRouter(prefix='/api/v1/recurring-payments', tags=['Payments'])
 @router.get('')
 def recurring(user: User = Depends(current_user), db: Session = Depends(get_db)):
     rows = list_payments(db)
-    return [{**public(row), 'amount': str(row.amount)} for row in rows]
+    return [{**public(row, ('payment_type',)), 'amount': str(row.amount)} for row in rows]
 
 
 @router.post('', status_code=201)

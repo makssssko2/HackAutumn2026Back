@@ -10,8 +10,7 @@ from app.core.bootstrap import bootstrap
 from app.core.config import settings
 from app.core.db import SessionLocal
 from app.domain.services import audit, confirm_occurrence
-from app.models import Channel, ChannelLink, Delivery, Occurrence, Receipt, utcnow
-from app.notifications import telegram_buttons
+from app.models import Channel, ChannelLink, Delivery, Occurrence, Receipt, RecurringPayment, utcnow
 from app.presentation.receipts import receipt_html
 from app.bot_interactions import open_action, handle_action as handle_date_action
 
@@ -104,7 +103,8 @@ async def handle_action(query: CallbackQuery, bot: Bot):
             if not receipt:
                 await query.answer('Демонстрационный чек не создан. Внешний чек можно прикрепить в панели.', show_alert=True)
                 return
-            document = BufferedInputFile(receipt_html(receipt, row).encode('utf-8'), filename=f'{receipt.number}.html')
+            payment = db.get(RecurringPayment, row.recurring_id)
+            document = BufferedInputFile(receipt_html(receipt, row, payment.description).encode('utf-8'), filename=f'{receipt.number}.html')
             await query.answer()
             await bot.send_document(query.message.chat.id, document, caption='Демонстрационный чек · денежные средства не списывались.')
             return
@@ -139,7 +139,8 @@ async def handle_action(query: CallbackQuery, bot: Bot):
             await query.message.edit_reply_markup(reply_markup=None)
             receipt = db.scalar(select(Receipt).where(Receipt.occurrence_id == row.id, Receipt.voided.is_(False)).order_by(Receipt.created_at.desc()))
             if receipt:
-                await bot.send_document(query.message.chat.id, BufferedInputFile(receipt_html(receipt, row).encode('utf-8'), filename=f'{receipt.number}.html'), caption='Демонстрационная оплата подтверждена. Чек также сохранен в панели.')
+                payment = db.get(RecurringPayment, row.recurring_id)
+                await bot.send_document(query.message.chat.id, BufferedInputFile(receipt_html(receipt, row, payment.description).encode('utf-8'), filename=f'{receipt.number}.html'), caption='Демонстрационная оплата подтверждена. Чек также сохранен в панели.')
 
 
 async def main():

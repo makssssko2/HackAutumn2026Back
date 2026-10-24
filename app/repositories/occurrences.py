@@ -13,6 +13,7 @@ def list_occurrences(
     currency: str | None = None,
     q: str | None = None,
     recurring_id: str | None = None,
+    payment_type: str | None = None,
     limit: int = 1000,
 ) -> list[Occurrence]:
     query = select(Occurrence)
@@ -24,6 +25,10 @@ def list_occurrences(
         query = query.where(Occurrence.currency == currency)
     if recurring_id:
         query = query.where(Occurrence.recurring_id == recurring_id)
+    if payment_type:
+        query = query.where(Occurrence.recurring_id.in_(
+            select(RecurringPayment.id).where(RecurringPayment.payment_type == payment_type)
+        ))
     if q:
         query = query.where(Occurrence.title.icontains(q, autoescape=True))
     if status == 'paid':
@@ -44,6 +49,17 @@ def get_occurrence(db: Session, oid: str) -> Occurrence | None:
 
 def get_occurrence_payment(db: Session, occurrence: Occurrence) -> RecurringPayment | None:
     return db.get(RecurringPayment, occurrence.recurring_id)
+
+
+def get_occurrence_payment_data(db: Session, occurrence_ids: set[str]) -> dict[str, tuple[str, str]]:
+    if not occurrence_ids:
+        return {}
+    rows = db.execute(
+        select(Occurrence.id, RecurringPayment.payment_type, RecurringPayment.description)
+        .join(RecurringPayment, RecurringPayment.id == Occurrence.recurring_id)
+        .where(Occurrence.id.in_(occurrence_ids))
+    )
+    return {occurrence_id: (payment_type, description) for occurrence_id, payment_type, description in rows}
 
 
 def list_occurrence_receipts(db: Session, occurrence_id: str) -> list[Receipt]:

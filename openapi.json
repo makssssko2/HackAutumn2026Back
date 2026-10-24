@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Invoice Keeper API",
-    "description": "Учет регулярных расходов и уведомления. Веб-панель и HTTP API доступны только администратору. Участники подтверждают демонстрационную оплату в Telegram или по приватной ссылке одного счета из письма, без веб-аккаунта.",
+    "description": "Учет регулярных расходов и уведомления. Пользователи просматривают счета и подтверждают демонстрационные оплаты, администратор управляет платежами и доставкой. Участники подтверждают демонстрационную оплату в Telegram или по приватной ссылке одного счета из письма, без веб-аккаунта.",
     "version": "1.0.0"
   },
   "paths": {
@@ -155,6 +155,30 @@
             }
           }
         }
+      }
+    },
+    "/api/v1/settings": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "App Settings",
+        "operationId": "app_settings_api_v1_settings_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ]
       }
     },
     "/api/v1/auth/login": {
@@ -519,6 +543,95 @@
         }
       }
     },
+    "/api/v1/one-time-payments": {
+      "post": {
+        "tags": [
+          "One-time Payments"
+        ],
+        "summary": "Add One Time",
+        "operationId": "add_one_time_api_v1_one_time_payments_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OneTimeIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/one-time-payments/{payment_id}": {
+      "delete": {
+        "tags": [
+          "One-time Payments"
+        ],
+        "summary": "Remove One Time",
+        "operationId": "remove_one_time_api_v1_one_time_payments__payment_id__delete",
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "payment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Payment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/payment-occurrences": {
       "get": {
         "tags": [
@@ -628,6 +741,23 @@
                 }
               ],
               "title": "Recurring Id"
+            }
+          },
+          {
+            "name": "payment_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^(one_time|recurring)$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Payment Type"
             }
           },
           {
@@ -1324,13 +1454,29 @@
         }
       }
     },
-    "/api/v1/audit": {
-      "get": {
+    "/api/v1/notifications/occurrences/{occurrence_id}/remind": {
+      "post": {
         "tags": [
-          "Audit"
+          "Notifications"
         ],
-        "summary": "Audit List",
-        "operationId": "audit_list_api_v1_audit_get",
+        "summary": "Remind Occurrence",
+        "operationId": "remind_occurrence_api_v1_notifications_occurrences__occurrence_id__remind_post",
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "occurrence_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Occurrence Id"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -1339,37 +1485,18 @@
                 "schema": {}
               }
             }
-          }
-        },
-        "security": [
-          {
-            "APIKeyCookie": []
-          }
-        ]
-      }
-    },
-    "/api/v1/settings": {
-      "get": {
-        "tags": [
-          "System"
-        ],
-        "summary": "App Settings",
-        "operationId": "app_settings_api_v1_settings_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
+          },
+          "422": {
+            "description": "Validation Error",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
               }
             }
           }
-        },
-        "security": [
-          {
-            "APIKeyCookie": []
-          }
-        ]
+        }
       }
     },
     "/api/v1/payment-occurrences/{occurrence_id}/attachments": {
@@ -1573,6 +1700,30 @@
           }
         }
       }
+    },
+    "/api/v1/audit": {
+      "get": {
+        "tags": [
+          "Audit"
+        ],
+        "summary": "Audit List",
+        "operationId": "audit_list_api_v1_audit_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -1758,6 +1909,65 @@
         },
         "type": "object",
         "title": "OccurrencePatch"
+      },
+      "OneTimeIn": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Description",
+            "default": ""
+          },
+          "amount": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,12}|(?=[\\d.]{1,15}0*$)\\d{0,12}\\.\\d{0,2}0*$)"
+              }
+            ],
+            "title": "Amount"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "RUB",
+              "USD",
+              "EUR"
+            ],
+            "title": "Currency"
+          },
+          "due_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Due Date"
+          },
+          "group_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Group Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "amount",
+          "currency",
+          "due_date"
+        ],
+        "title": "OneTimeIn"
       },
       "PaymentConfirmation": {
         "properties": {

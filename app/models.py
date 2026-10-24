@@ -46,6 +46,7 @@ class RecurringPayment(Base):
     first_due_date: Mapped[date] = mapped_column(Date)
     frequency: Mapped[str] = mapped_column(String(16), default='monthly')
     group_ids: Mapped[list] = mapped_column(JSON, default=list)
+    payment_type: Mapped[str] = mapped_column(String(16), default='recurring')
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     stopped_at: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -66,6 +67,7 @@ class Occurrence(Base):
     cancelled: Mapped[bool] = mapped_column(Boolean, default=False)
     revision: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Receipt(Base):

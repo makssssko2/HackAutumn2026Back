@@ -10,7 +10,7 @@ from app.config import today
 from app.models import AudienceGroup, AuthSession, Channel, Delivery, Occurrence, Receipt, RecurringPayment, User, utcnow
 from app.security import token_hash
 from app.schemas import RecurringIn
-from app.services import confirm_occurrence, create_payment, generate_occurrences, period_date, prepare_reminders, stop_payment
+from app.services import confirm_occurrence, create_payment, generate_occurrences, period_date, prepare_reminders
 
 
 def create(client, **changes):
@@ -28,9 +28,11 @@ def test_auth_and_logout(client):
     assert client.get('/api/v1/payment-occurrences').status_code == 401
     assert client.get('/api/v1/docs').status_code == 401
     assert client.post('/api/v1/auth/login', json={'login': 'user', 'password': 'wrong'}).status_code == 401
-    denied = client.post('/api/v1/auth/login', json={'login': 'user', 'password': 'user12345'})
-    assert denied.status_code == 403 and 'администратору' in denied.json()['detail']
-    assert 'ik_session' not in denied.cookies
+    logged_user = client.post('/api/v1/auth/login', json={'login': 'user', 'password': 'user12345'})
+    assert logged_user.status_code == 200
+    assert logged_user.json()['role'] == 'user'
+    assert client.get('/api/v1/auth/me').status_code == 200
+    assert client.post('/api/v1/auth/logout').status_code == 200
     assert client.get('/api/v1/auth/me').status_code == 401
     assert client.post('/api/v1/auth/login', json={'login': 'admin', 'password': 'admin12345'}).status_code == 200
     assert client.get('/api/v1/auth/me').json()['role'] == 'admin'
@@ -38,19 +40,192 @@ def test_auth_and_logout(client):
     assert client.get('/api/v1/auth/me').status_code == 401
 
 
-def test_existing_participant_session_cannot_access_web_api(client, db_factory):
+def test_user_session_has_user_permissions_only(client, db_factory):
     with db_factory() as db:
         user = db.scalar(select(User).where(User.login == 'user'))
         db.add(AuthSession(token_hash=token_hash('old-user-session'), user_id=user.id, expires_at=utcnow() + timedelta(hours=1)))
         db.commit()
     client.cookies.set('ik_session', 'old-user-session')
-    for path in ('/auth/me', '/recurring-payments', '/payment-occurrences', '/payment-occurrences/missing', '/payments/summary', '/payments/budget', '/notifications', '/groups', '/settings', '/audit', '/docs', '/openapi.json', '/receipts/missing', '/attachments/missing/download'):
-        assert client.get('/api/v1' + path).status_code == 403, path
-    assert client.patch('/api/v1/payment-occurrences/missing', json={'paid': True, 'demo': True}).status_code == 403
+    expected = {
+        '/auth/me': 200,
+        '/recurring-payments': 200,
+        '/payment-occurrences': 200,
+        '/payment-occurrences/missing': 404,
+        '/payments/summary': 200,
+        '/payments/budget': 200,
+        '/notifications': 403,
+        '/groups': 403,
+        '/settings': 200,
+        '/audit': 403,
+        '/docs': 200,
+        '/openapi.json': 200,
+        '/receipts/missing': 404,
+        '/attachments/missing/download': 404,
+    }
+    for path, status in expected.items():
+        assert client.get('/api/v1' + path).status_code == status, path
+    assert client.patch('/api/v1/payment-occurrences/missing', json={'paid': True, 'demo': True}).status_code == 404
     assert client.post('/api/v1/recurring-payments', json={'title': 'X', 'amount': '1', 'currency': 'RUB', 'first_due_date': str(today())}).status_code == 403
     assert client.get('/api/v1/users').status_code == 403
     assert client.post('/api/v1/users', json={'login': 'hacker', 'name': 'X', 'password': 'password123', 'role': 'admin'}).status_code == 403
     assert client.post('/api/v1/channels', json={'name': 'x', 'kind': 'inapp'}).status_code == 403
+
+
+def test_one_time_payment_is_single_and_excluded_from_recurring_templates(admin):
+    response = admin.post('/api/v1/one-time-payments', json={
+        'title': 'One-time license',
+        'description': 'Annual setup',
+        'amount': '42.00',
+        'currency': 'USD',
+        'due_date': str(today() + timedelta(days=20)),
+    })
+    assert response.status_code == 201, response.text
+    payment = response.json()
+    assert payment['payment_type'] == 'one_time'
+    assert payment['frequency'] not in ('weekly', 'monthly', 'quarterly', 'yearly')
+
+    recurring = admin.get('/api/v1/recurring-payments').json()
+    assert payment['id'] not in {row['id'] for row in recurring}
+    occurrences = admin.get('/api/v1/payment-occurrences', params={'payment_type': 'one_time'}).json()
+    matching = [row for row in occurrences if row['recurring_id'] == payment['id']]
+    assert len(matching) == 1
+
+    for _ in range(2):
+        assert admin.get('/api/v1/payments/budget', params={'year': today().year}).status_code == 200
+    occurrences = admin.get('/api/v1/payment-occurrences', params={'payment_type': 'one_time'}).json()
+    assert len([row for row in occurrences if row['recurring_id'] == payment['id']]) == 1
+
+
+def test_one_time_payment_is_included_once_in_currency_totals(admin):
+    admin.post('/api/v1/one-time-payments', json={
+        'title': 'One-time report item',
+        'amount': '42.00',
+        'currency': 'USD',
+        'due_date': str(today()),
+    })
+    result = admin.get('/api/v1/payments/summary').json()['currencies']
+    assert Decimal(result['USD']['planned']) == Decimal('42.00')
+
+
+def test_invoice_description_is_present_in_period_and_receipt(admin):
+    payment = create(admin, description='Обслуживание сервера')
+    row = first(admin, payment)
+    assert row['description'] == 'Обслуживание сервера'
+    detail_url = '/api/v1/payment-occurrences/' + row['id']
+    paid = admin.patch(detail_url, json={'paid': True, 'demo': True, 'expected_revision': row['revision']})
+    assert paid.status_code == 200
+    detail = admin.get(detail_url).json()
+    assert detail['description'] == 'Обслуживание сервера'
+    receipt = admin.get('/api/v1/receipts/' + detail['receipts'][0]['id'])
+    assert 'Обслуживание сервера' in receipt.text
+
+
+def test_one_time_payment_can_be_cancelled_without_deleting_history(admin):
+    payment = admin.post('/api/v1/one-time-payments', json={
+        'title': 'Cancelable one-time',
+        'amount': '10.00',
+        'currency': 'RUB',
+        'due_date': str(today()),
+    }).json()
+    assert admin.delete('/api/v1/one-time-payments/' + payment['id']).json() == {'ok': True}
+    rows = admin.get('/api/v1/payment-occurrences', params={'payment_type': 'one_time'}).json()
+    row = next(item for item in rows if item['recurring_id'] == payment['id'])
+    assert row['cancelled'] is True
+    assert row['status'] == 'cancelled'
+
+
+def test_user_can_confirm_one_time_payment_and_get_demo_receipt(admin):
+    payment = admin.post('/api/v1/one-time-payments', json={
+        'title': 'One-time service',
+        'amount': '18.50',
+        'currency': 'EUR',
+        'due_date': str(today()),
+    }).json()
+    row = next(item for item in admin.get('/api/v1/payment-occurrences', params={'payment_type': 'one_time'}).json()
+               if item['recurring_id'] == payment['id'])
+    assert admin.post('/api/v1/auth/logout').status_code == 200
+    assert admin.post('/api/v1/auth/login', json={'login': 'user', 'password': 'user12345'}).status_code == 200
+    response = admin.patch('/api/v1/payment-occurrences/' + row['id'], json={
+        'paid': True,
+        'demo': True,
+        'expected_revision': row['revision'],
+    })
+    assert response.status_code == 200, response.text
+    detail = admin.get('/api/v1/payment-occurrences/' + row['id']).json()
+    assert detail['payment_type'] == 'one_time'
+    assert len([receipt for receipt in detail['receipts'] if not receipt['voided']]) == 1
+
+
+def test_user_cannot_create_or_cancel_one_time_payment(client):
+    assert client.post('/api/v1/auth/login', json={'login': 'user', 'password': 'user12345'}).status_code == 200
+    body = {'title': 'Forbidden', 'amount': '1.00', 'currency': 'RUB', 'due_date': str(today())}
+    assert client.post('/api/v1/one-time-payments', json=body).status_code == 403
+    assert client.delete('/api/v1/one-time-payments/missing').status_code == 403
+
+
+def test_forecast_period_is_released_to_channel_connected_before_reminder_window(admin, db_factory):
+    payment = create(admin, first_due_date=str(today() - timedelta(days=7)), frequency='weekly')
+    channel = admin.post('/api/v1/channels', json={
+        'name': 'Future recipient',
+        'kind': 'email',
+        'config': {'email': 'future@example.com'},
+    }).json()
+    with db_factory() as db:
+        forecast = db.scalar(select(Occurrence).where(
+            Occurrence.recurring_id == payment['id'], Occurrence.due_date == today()))
+        assert forecast is not None
+        assert forecast.released_at is None
+        prepare_reminders(db)
+        db.commit()
+        deliveries = list(db.scalars(select(Delivery).where(
+            Delivery.occurrence_id == forecast.id, Delivery.channel_id == channel['id'],
+            Delivery.event == 'reminder')))
+        assert len(deliveries) == 1
+
+
+def test_historical_period_is_not_sent_to_channel_connected_later(admin, db_factory):
+    create(admin, first_due_date=str(today() - timedelta(days=30)), frequency='weekly')
+    channel = admin.post('/api/v1/channels', json={
+        'name': 'Late recipient',
+        'kind': 'email',
+        'config': {'email': 'late@example.com'},
+    }).json()
+    with db_factory() as db:
+        prepare_reminders(db)
+        db.commit()
+        deliveries = list(db.scalars(select(Delivery).where(
+            Delivery.channel_id == channel['id'], Delivery.event == 'reminder')))
+        assert deliveries == []
+
+
+def test_admin_can_manually_release_a_missed_reminder(admin, db_factory):
+    payment = create(admin, first_due_date=str(today() - timedelta(days=7)), frequency='weekly')
+    admin.post('/api/v1/channels', json={
+        'name': 'Manual recipient',
+        'kind': 'email',
+        'config': {'email': 'manual@example.com'},
+    })
+    with db_factory() as db:
+        occurrence = db.scalar(select(Occurrence).where(
+            Occurrence.recurring_id == payment['id'], Occurrence.due_date == today()))
+        assert occurrence is not None
+        occurrence_id = occurrence.id
+        db.commit()
+    response = admin.post(f'/api/v1/notifications/occurrences/{occurrence_id}/remind')
+    assert response.status_code == 200, response.text
+    assert admin.post(f'/api/v1/notifications/occurrences/{occurrence_id}/remind').status_code == 200
+
+
+def test_manual_reminder_rejects_uncertain_delivery(admin, db_factory):
+    payment = create(admin, first_due_date=str(today() - timedelta(days=7)), frequency='weekly')
+    with db_factory() as db:
+        occurrence = db.scalar(select(Occurrence).where(
+            Occurrence.recurring_id == payment['id'], Occurrence.due_date == today()))
+        assert occurrence is not None
+        db.add(Delivery(occurrence_id=occurrence.id, channel_id=db.scalar(select(Channel.id).where(Channel.kind == 'inapp')), event='reminder', status='uncertain'))
+        db.commit()
+        occurrence_id = occurrence.id
+    assert admin.post(f'/api/v1/notifications/occurrences/{occurrence_id}/remind').status_code == 409
 
 
 @pytest.mark.parametrize('first_date,frequency,index,expected', [

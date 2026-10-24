@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import attachments, audit, auth, channels, groups, notifications, occurrences, payments, receipts, reports, system, users
+from app.api import attachments, audit, auth, channels, groups, notifications, occurrences, one_time_payments, payments, receipts, reports, system, users
 from app.api.auth import login_attempts  # re-exported for tests and legacy imports
 from app.notifications import telegram_call  # re-exported: tests monkeypatch main.telegram_call
 from app.core.bootstrap import bootstrap
@@ -24,7 +24,7 @@ async def lifespan(app):
 app = FastAPI(
     title='Invoice Keeper API',
     version='1.0.0',
-    description='Учет регулярных расходов и уведомления. Веб-панель и HTTP API доступны только администратору. Участники подтверждают демонстрационную оплату в Telegram или по приватной ссылке одного счета из письма, без веб-аккаунта.',
+    description='Учет регулярных расходов и уведомления. Пользователи просматривают счета и подтверждают демонстрационные оплаты, администратор управляет платежами и доставкой. Участники подтверждают демонстрационную оплату в Telegram или по приватной ссылке одного счета из письма, без веб-аккаунта.',
     lifespan=lifespan,
     docs_url=None,
     redoc_url=None,
@@ -59,6 +59,7 @@ app.include_router(system.router)
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(payments.router)
+app.include_router(one_time_payments.router)
 app.include_router(occurrences.router)
 app.include_router(reports.router)
 app.include_router(channels.router)

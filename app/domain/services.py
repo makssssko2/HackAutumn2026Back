@@ -28,7 +28,7 @@ def period_date(first: date, frequency: str, index: int) -> date:
 
 
 def generate_occurrences(db: Session, payment: RecurringPayment, until: date | None = None):
-    if not payment.active:
+    if not payment.active or payment.payment_type != 'recurring':
         return
     until = max(until or (today() + timedelta(days=400)), payment.first_due_date)
     existing = set(db.scalars(select(Occurrence.due_date).where(Occurrence.recurring_id == payment.id)))
@@ -54,14 +54,13 @@ def insert_unique(db: Session, model, values: list[dict], keys: list[str]):
         db.execute(insert(model).values(values[start:start + 100]).on_conflict_do_nothing(index_elements=keys))
 
 
-def target_channels(db: Session, payment: RecurringPayment, occurrence: Occurrence):
-    # Existing channels are backfilled with an epoch watermark and keep their
-    # historical broadcast behavior. New channels only see periods issued after
-    # they were connected. The in-app journal always stays complete.
-    channels = list(db.scalars(select(Channel).where(
-        Channel.active.is_(True),
-        or_(Channel.kind == 'inapp', Channel.connected_at <= occurrence.created_at),
-    )))
+def target_channels(db: Session, payment: RecurringPayment, occurrence: Occurrence, include_late_channels: bool = False):
+    # Forecast creation is not a delivery boundary. External channels are
+    # eligible only when they were connected before the occurrence was released.
+    query = select(Channel).where(Channel.active.is_(True))
+    if not include_late_channels:
+        query = query.where(or_(Channel.kind == 'inapp', Channel.connected_at <= occurrence.released_at))
+    channels = list(db.scalars(query))
     if not payment.group_ids:
         return channels
     groups = db.scalars(select(AudienceGroup).where(AudienceGroup.id.in_(payment.group_ids)))
@@ -69,10 +68,13 @@ def target_channels(db: Session, payment: RecurringPayment, occurrence: Occurren
     return [channel for channel in channels if channel.id in selected or channel.kind == 'inapp']
 
 
-def queue_event(db: Session, occurrence: Occurrence, event: str):
+def queue_event(db: Session, occurrence: Occurrence, event: str, include_late_channels: bool = False):
     payment = db.get(RecurringPayment, occurrence.recurring_id)
+    if occurrence.released_at is None and not event.startswith('test:'):
+        occurrence.released_at = utcnow()
+        db.flush()
     insert_unique(db, Delivery, [dict(occurrence_id=occurrence.id, channel_id=channel.id, event=event)
-                   for channel in target_channels(db, payment, occurrence)], ['occurrence_id', 'channel_id', 'event'])
+                   for channel in target_channels(db, payment, occurrence, include_late_channels)], ['occurrence_id', 'channel_id', 'event'])
     db.flush()
 
 
@@ -91,6 +93,38 @@ def create_payment(db: Session, data, actor: str):
     return payment
 
 
+def create_one_time_payment(db: Session, data, actor: str):
+    if data.group_ids:
+        found = set(db.scalars(select(AudienceGroup.id).where(AudienceGroup.id.in_(data.group_ids))))
+        if found != set(data.group_ids):
+            raise HTTPException(422, 'Одна из групп рассылки не найдена')
+    payment = RecurringPayment(
+        title=data.title,
+        description=data.description,
+        amount=data.amount,
+        currency=data.currency,
+        first_due_date=data.due_date,
+        frequency='one_time',
+        group_ids=data.group_ids,
+        payment_type='one_time',
+    )
+    db.add(payment)
+    db.flush()
+    occurrence = Occurrence(
+        recurring_id=payment.id,
+        title=payment.title,
+        amount=payment.amount,
+        currency=payment.currency,
+        due_date=payment.first_due_date,
+    )
+    db.add(occurrence)
+    db.flush()
+    if occurrence.due_date <= today() + timedelta(days=3):
+        queue_event(db, occurrence, 'reminder')
+    audit(db, actor, 'payment.one_time_created', payment.id, title=payment.title)
+    return payment
+
+
 def prepare_reminders(db: Session):
     for payment in db.scalars(select(RecurringPayment).where(RecurringPayment.active.is_(True))):
         generate_occurrences(db, payment)
@@ -103,10 +137,11 @@ def prepare_reminders(db: Session):
         queue_event(db, occurrence, 'reminder')
 
 
-def occurrence_out(row: Occurrence):
+def occurrence_out(row: Occurrence, payment_type: str = 'recurring', description: str = ''):
     delay = 0 if row.cancelled else max(0, ((row.paid_at if row.paid else today()) - row.due_date).days)
     return {
         'id': row.id, 'recurring_id': row.recurring_id, 'title': row.title,
+        'payment_type': payment_type, 'description': description,
         'amount': str(row.amount), 'currency': row.currency,
         'due_date': row.due_date, 'paid': row.paid, 'paid_at': row.paid_at,
         'paid_by': row.paid_by, 'cancelled': row.cancelled, 'revision': row.revision,
@@ -165,6 +200,19 @@ def stop_payment(db: Session, payment: RecurringPayment, actor: str):
         if db.scalar(select(Delivery.id).where(Delivery.occurrence_id == row.id).limit(1)):
             queue_event(db, row, f'state:{row.revision}')
     audit(db, actor, 'payment.stopped', payment.id, title=payment.title)
+
+
+def cancel_one_time_payment(db: Session, payment: RecurringPayment, actor: str):
+    occurrence = db.scalar(select(Occurrence).where(Occurrence.recurring_id == payment.id))
+    if not occurrence or occurrence.paid:
+        raise HTTPException(409, 'Оплаченный разовый платеж нельзя отменить')
+    payment.active = False
+    payment.stopped_at = today()
+    occurrence.cancelled = True
+    occurrence.revision += 1
+    if db.scalar(select(Delivery.id).where(Delivery.occurrence_id == occurrence.id).limit(1)):
+        queue_event(db, occurrence, f'state:{occurrence.revision}')
+    audit(db, actor, 'payment.one_time_cancelled', payment.id, title=payment.title)
 
 
 def summarize(rows):

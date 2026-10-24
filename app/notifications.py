@@ -11,7 +11,7 @@ from email.message import EmailMessage
 from urllib.parse import urlparse
 
 import httpx
-from sqlalchemy import or_, select, update
+from sqlalchemy import select, update
 
 from app.core.config import settings
 from app.core.db import SessionLocal
@@ -56,9 +56,10 @@ def telegram_call(method: str, payload: dict):
         return body['result']
 
 
-def notification_text(row: Occurrence, event: str):
+def notification_text(row: Occurrence, event: str, description: str = ''):
     label = 'Оплачено' if row.paid else ('Счет отменен' if row.cancelled else ('Напоминание об оплате' if event == 'reminder' else 'Новый счет'))
-    return f'{label}\n\n{row.title}\n{row.amount:.2f} {row.currency}\nСрок: {row.due_date:%d.%m.%Y}' + (f'\nОплачено: {row.paid_at:%d.%m.%Y}\nПлательщик: {row.paid_by}' if row.paid else '')
+    details = f'\nОписание: {description}' if description else ''
+    return f'{label}\n\n{row.title}{details}\n{row.amount:.2f} {row.currency}\nСрок: {row.due_date:%d.%m.%Y}' + (f'\nОплачено: {row.paid_at:%d.%m.%Y}\nПлательщик: {row.paid_by}' if row.paid else '')
 
 
 def telegram_buttons(row: Occurrence):
@@ -73,11 +74,13 @@ def telegram_buttons(row: Occurrence):
 
 
 def send_delivery(db, delivery: Delivery, channel: Channel, row: Occurrence):
-    text = notification_text(row, delivery.event)
+    payment = db.get(RecurringPayment, row.recurring_id)
+    description = payment.description
+    text = notification_text(row, delivery.event, description)
     if channel.kind == 'inapp':
         return None
     if channel.kind == 'telegram':
-        text = telegram_message(row, delivery.event)
+        text = telegram_message(row, delivery.event, description)
         chat_id = channel.config.get('chat_id')
         if not chat_id:
             raise ValueError('Telegram-чат еще не привязан')
@@ -101,7 +104,7 @@ def send_delivery(db, delivery: Delivery, channel: Channel, row: Occurrence):
         # after the remote server accepts the message.
         db.commit()
         message.set_content(text + '\n\nОплатить или посмотреть счет: ' + url + '\nДемонстрационный режим, без списания средств.')
-        message.add_alternative(email_html(row, delivery.event, url), subtype='html')
+        message.add_alternative(email_html(row, delivery.event, url, description), subtype='html')
         context = ssl.create_default_context()
         factory = smtplib.SMTP_SSL if settings.smtp_ssl else smtplib.SMTP
         options = {'context': context} if settings.smtp_ssl else {}
@@ -115,7 +118,7 @@ def send_delivery(db, delivery: Delivery, channel: Channel, row: Occurrence):
     if channel.kind == 'webhook':
         url = channel.config['url']
         validate_webhook(url)
-        body = json.dumps({'event_id': delivery.id, 'event': delivery.event, 'payment': occurrence_out(row)}, default=str, ensure_ascii=False).encode()
+        body = json.dumps({'event_id': delivery.id, 'event': delivery.event, 'payment': occurrence_out(row, payment.payment_type, description)}, default=str, ensure_ascii=False).encode()
         signature = hmac.new(channel.config.get('secret', '').encode(), body, hashlib.sha256).hexdigest()
         with httpx.Client(timeout=15, follow_redirects=False) as client:
             response = client.post(url, content=body, headers={'Content-Type': 'application/json', 'X-Invoice-Event-ID': delivery.id, 'X-Invoice-Signature': signature})

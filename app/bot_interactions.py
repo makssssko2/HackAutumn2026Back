@@ -10,7 +10,7 @@ from sqlalchemy import delete, select
 
 from app.core.config import today
 from app.domain.services import confirm_occurrence
-from app.models import BotAction, Receipt, utcnow
+from app.models import BotAction, Receipt, RecurringPayment, utcnow
 from app.presentation.message_templates import amount_label
 from app.presentation.receipts import receipt_html
 
@@ -43,16 +43,18 @@ def calendar_markup(action, month):
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def calendar_text(row):
-    return f'<b>Когда счет был оплачен?</b>\n\n{escape(row.title)}\n<b>{amount_label(row)}</b>\n\nВыберите фактическую дату в календаре. Срок счета {row.due_date:%d.%m.%Y} сохранится, просрочка пересчитается.'
+def calendar_text(row, description=''):
+    description_line = f'\n<i>{escape(description)}</i>' if description else ''
+    return f'<b>Когда счет был оплачен?</b>\n\n{escape(row.title)}{description_line}\n<b>{amount_label(row)}</b>\n\nВыберите фактическую дату в календаре. Срок счета {row.due_date:%d.%m.%Y} сохранится, просрочка пересчитается.'
 
 
-def confirmation(row, action):
+def confirmation(row, action, description=''):
+    description_line = f'\n<i>{escape(description)}</i>' if description else ''
     if action.mode == 'undo':
-        return (f'<b>Отменить отметку оплаты?</b>\n\n{escape(row.title)}\n\nСчет снова станет неоплаченным, фактическая дата очистится, демонстрационный чек будет аннулирован.',
+        return (f'<b>Отменить отметку оплаты?</b>\n\n{escape(row.title)}{description_line}\n\nСчет снова станет неоплаченным, фактическая дата очистится, демонстрационный чек будет аннулирован.',
                 InlineKeyboardMarkup(inline_keyboard=[[button('Отменить отметку', f'bc:{action.token}', 'danger')], [button('Оставить как есть', f'bn:{action.token}')]]))
     delay = max(0, (action.selected_date - row.due_date).days)
-    text = f'<b>{"Исправление даты" if row.paid else "Подтверждение оплаты"}</b>\n\n{escape(row.title)}\n<b>{amount_label(row)}</b>\n\nДата оплаты: <b>{action.selected_date:%d.%m.%Y}</b>\n' + (f'Просрочка: {delay} дн.' if delay else 'Оплачено вовремя.')
+    text = f'<b>{"Исправление даты" if row.paid else "Подтверждение оплаты"}</b>\n\n{escape(row.title)}{description_line}\n<b>{amount_label(row)}</b>\n\nДата оплаты: <b>{action.selected_date:%d.%m.%Y}</b>\n' + (f'Просрочка: {delay} дн.' if delay else 'Оплачено вовремя.')
     text += '\n\n<i>Демонстрационный режим. Денежные средства не списываются.</i>'
     return text, InlineKeyboardMarkup(inline_keyboard=[
         [button('Сохранить дату' if row.paid else 'Подтвердить оплату', f'bc:{action.token}', 'success')],
@@ -68,10 +70,12 @@ async def open_action(db, query, bot, row, mode):
                        expires_at=utcnow() + timedelta(minutes=15))
     db.add(action)
     db.commit()
+    payment = db.get(RecurringPayment, row.recurring_id)
+    description = payment.description
     if mode == 'date':
-        text, markup = calendar_text(row), calendar_markup(action, action.selected_date.replace(day=1))
+        text, markup = calendar_text(row, description), calendar_markup(action, action.selected_date.replace(day=1))
     else:
-        text, markup = confirmation(row, action)
+        text, markup = confirmation(row, action, description)
     await query.answer()
     await bot.send_message(query.message.chat.id, text, parse_mode='HTML', reply_markup=markup)
 
@@ -90,6 +94,8 @@ async def handle_action(db, query, bot, allowed_occurrence):
         await query.answer('Счет уже изменен. Откройте действие заново.', show_alert=True)
         return
     command = parts[0]
+    payment = db.get(RecurringPayment, row.recurring_id)
+    description = payment.description
     if command == 'bn':
         db.delete(action)
         db.commit()
@@ -106,11 +112,11 @@ async def handle_action(db, query, bot, allowed_occurrence):
             await query.answer('Выберите дату не позднее сегодняшней.', show_alert=True)
             return
         if command == 'bm':
-            text, markup = calendar_text(row), calendar_markup(action, chosen)
+            text, markup = calendar_text(row, description), calendar_markup(action, chosen)
         else:
             action.selected_date = chosen
             db.commit()
-            text, markup = confirmation(row, action)
+            text, markup = confirmation(row, action, description)
         await query.answer()
         try:
             await query.message.edit_text(text, parse_mode='HTML', reply_markup=markup)
@@ -144,4 +150,4 @@ async def handle_action(db, query, bot, allowed_occurrence):
     if mode != 'undo':
         receipt = db.scalar(select(Receipt).where(Receipt.occurrence_id == row.id, Receipt.voided.is_(False)))
         if receipt:
-            await bot.send_document(query.message.chat.id, BufferedInputFile(receipt_html(receipt, row).encode(), filename=f'{receipt.number}.html'), caption='Демонстрационный чек · дата оплаты сохранена, деньги не списывались.')
+            await bot.send_document(query.message.chat.id, BufferedInputFile(receipt_html(receipt, row, description).encode(), filename=f'{receipt.number}.html'), caption='Демонстрационный чек · дата оплаты сохранена, деньги не списывались.')

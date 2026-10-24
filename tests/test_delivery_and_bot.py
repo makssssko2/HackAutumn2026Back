@@ -21,7 +21,7 @@ from app.services import create_payment
 
 
 def sample(db):
-    payment = create_payment(db, RecurringIn(title='Test invoice', amount='12.50', currency='RUB', first_due_date=today()), 'admin')
+    payment = create_payment(db, RecurringIn(title='Test invoice', description='Описание тестового счета', amount='12.50', currency='RUB', first_due_date=today()), 'admin')
     return db.scalar(select(Occurrence).where(Occurrence.recurring_id == payment.id).order_by(Occurrence.due_date))
 
 
@@ -50,7 +50,9 @@ def test_webhook_signature_and_stable_event_id(db_factory, monkeypatch):
         assert captured['headers']['X-Invoice-Event-ID'] == delivery.id
         expected = hmac.new(b'test-secret', captured['content'], hashlib.sha256).hexdigest()
         assert captured['headers']['X-Invoice-Signature'] == expected
-        assert json.loads(captured['content'])['payment']['amount'] == '12.50'
+        payload = json.loads(captured['content'])['payment']
+        assert payload['amount'] == '12.50'
+        assert payload['description'] == 'Описание тестового счета'
 
 
 def test_webhook_roundtrip_and_retry_through_worker(admin, db_factory, monkeypatch):

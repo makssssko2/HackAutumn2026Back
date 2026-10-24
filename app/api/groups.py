@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
-from app.core.security import admin_user, current_user
+from app.core.security import admin_user
 from app.domain.formatters import public
 from app.domain.services import audit
 from app.domain.validators import check_group
@@ -16,7 +16,7 @@ router = APIRouter(prefix='/api/v1/groups', tags=['Groups'])
 
 
 @router.get('')
-def groups(user: User = Depends(current_user), db: Session = Depends(get_db)):
+def groups(user: User = Depends(admin_user), db: Session = Depends(get_db)):
     return [public(row) for row in list_groups(db)]
 
 

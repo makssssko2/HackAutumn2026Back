@@ -15,7 +15,7 @@ from app.services import create_payment
 
 
 def invoice(db, kind='email'):
-    payment = create_payment(db, RecurringIn(title='Сервер <team> & домен', amount='1250', currency='RUB', first_due_date=today() - timedelta(days=10)), 'admin')
+    payment = create_payment(db, RecurringIn(title='Сервер <team> & домен', description='Описание <команды> & срок', amount='1250', currency='RUB', first_due_date=today() - timedelta(days=10)), 'admin')
     row = db.scalar(select(Occurrence).where(Occurrence.recurring_id == payment.id).order_by(Occurrence.due_date))
     channel = Channel(name='Recipients', kind=kind, config={'email': 'team@example.com'} if kind == 'email' else {'chat_id': '-100123'})
     db.add(channel); db.flush()
@@ -37,6 +37,7 @@ def test_email_link_is_scoped_and_get_does_not_pay(client, db_factory):
         oid, _, path = email_link(db)
     data = client.get(path).json()
     assert not data['paid'] and data['overdue_days'] == 10
+    assert data['description'] == 'Описание <команды> & срок'
     assert 'recurring_id' not in data and 'paid_by' not in data
     assert client.get('/api/v1/payment-occurrences').status_code == 401
     assert client.get(path + '/receipt').status_code == 404
@@ -148,8 +149,8 @@ def test_message_templates_escape_html_and_keyboard_callbacks(db_factory):
     from app.bot_interactions import calendar_markup
     with db_factory() as db:
         row, _, _ = invoice(db)
-        for text in [telegram_message(row, 'reminder'), email_html(row, 'reminder', 'https://example.com/pay/demo')]:
-            assert '&lt;team&gt; &amp;' in text and '<team>' not in text
+        for text in [telegram_message(row, 'reminder', 'Описание <канала> & детали'), email_html(row, 'reminder', 'https://example.com/pay/demo', 'Описание <канала> & детали')]:
+            assert '&lt;team&gt; &amp;' in text and '&lt;канала&gt; &amp; детали' in text and '<team>' not in text
         assert 'Оплатить счет' in email_html(row, 'reminder', 'https://example.com/pay/demo')
         assert telegram_buttons(row)['inline_keyboard'][0][0]['style'] == 'success'
         action = SimpleNamespace(token='A' * 16)

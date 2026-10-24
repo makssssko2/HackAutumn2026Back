@@ -5,7 +5,9 @@ from app.models import RecurringPayment
 
 
 def list_payments(db: Session) -> list[RecurringPayment]:
-    return list(db.scalars(select(RecurringPayment).order_by(RecurringPayment.created_at.desc())))
+    return list(db.scalars(select(RecurringPayment).where(
+        RecurringPayment.payment_type == 'recurring'
+    ).order_by(RecurringPayment.created_at.desc())))
 
 
 def list_active_payments(db: Session) -> list[RecurringPayment]:

@@ -40,8 +40,6 @@ def current_user(request: Request, db: Session = Depends(get_db), token: str | N
     user = db.get(User, auth.user_id)
     if not user or not user.active:
         raise HTTPException(401, 'Учетная запись недоступна')
-    if user.role != 'admin':
-        raise HTTPException(403, 'Веб-панель доступна только администратору. Используйте уведомления в Telegram.')
     return user
 
 

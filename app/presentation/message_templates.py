@@ -17,8 +17,9 @@ def status_label(row, event):
     return 'Напоминание об оплате' if event == 'reminder' else 'Новый счет для команды'
 
 
-def telegram_message(row, event):
-    lines = [f'<b>{status_label(row, event)}</b>', '', f'<b>{escape(row.title)}</b>',
+def telegram_message(row, event, description=''):
+    description_line = f'\n<i>{escape(description)}</i>' if description else ''
+    lines = [f'<b>{status_label(row, event)}</b>', '', f'<b>{escape(row.title)}</b>{description_line}',
              f'<blockquote><b>{amount_label(row)}</b>\nСрок оплаты: {row.due_date:%d.%m.%Y}</blockquote>']
     if row.paid:
         delay = max(0, (row.paid_at - row.due_date).days)
@@ -35,8 +36,9 @@ def telegram_message(row, event):
     return '\n'.join(lines)
 
 
-def email_html(row, event, url):
+def email_html(row, event, url, description=''):
     title, state, amount = escape(row.title), status_label(row, event), amount_label(row)
+    description_block = f'<p style="margin:0 0 20px;line-height:1.5;font-size:15px;color:#57524d">{escape(description)}</p>' if description else ''
     if row.paid:
         caption = f'Оплата подтверждена {row.paid_at:%d.%m.%Y}. Чек доступен на странице счета.'
         button = 'Посмотреть счет и чек'
@@ -56,6 +58,7 @@ def email_html(row, event, url):
 <tr><td style="padding:32px;background:#ffffff;border-radius:16px">
 <p style="margin:0 0 20px;font-size:14px;color:#805326">{escape(state)}</p>
 <h1 style="margin:0 0 24px;font-size:28px;line-height:1.25;overflow-wrap:anywhere">{title}</h1>
+{description_block}
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#fff0e2;border-radius:12px"><tr><td style="padding:24px">
 <p style="margin:0 0 8px;color:#805326;font-size:13px">Сумма к оплате</p>
 <p style="margin:0 0 16px;font-size:34px;font-weight:bold">{amount}</p>

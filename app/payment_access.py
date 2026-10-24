@@ -12,6 +12,7 @@ from app.core.db import get_db
 from app.domain.services import confirm_occurrence, occurrence_out
 from app.models import Channel, PaymentLink, Occurrence, Receipt, utcnow
 from app.presentation.receipts import receipt_html
+from app.repositories.occurrences import get_occurrence_payment
 
 router = APIRouter(prefix='/api/v1/public/payments', tags=['Recipient payment'])
 
@@ -39,8 +40,9 @@ def linked_invoice(db, token):
 
 def recipient_out(db, row):
     receipt = db.scalar(select(Receipt.id).where(Receipt.occurrence_id == row.id, Receipt.voided.is_(False)))
-    data = occurrence_out(row)
-    fields = ('title', 'amount', 'currency', 'due_date', 'paid', 'paid_at', 'cancelled', 'revision', 'overdue_days', 'status')
+    payment = get_occurrence_payment(db, row)
+    data = occurrence_out(row, payment.payment_type, payment.description)
+    fields = ('title', 'description', 'amount', 'currency', 'due_date', 'paid', 'paid_at', 'cancelled', 'revision', 'overdue_days', 'status', 'payment_type')
     return {**{key: data[key] for key in fields}, 'today': today(), 'has_receipt': bool(receipt)}
 
 
@@ -74,6 +76,7 @@ def get_receipt(token: str, db: Session = Depends(get_db)):
     receipt = db.scalar(select(Receipt).where(Receipt.occurrence_id == row.id, Receipt.voided.is_(False)))
     if not receipt:
         raise HTTPException(404, 'Действующий чек отсутствует')
-    return HTMLResponse(receipt_html(receipt, row), headers={
+    payment = get_occurrence_payment(db, row)
+    return HTMLResponse(receipt_html(receipt, row, payment.description), headers={
         'Content-Disposition': f'attachment; filename="{receipt.number}.html"',
         'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox"})
