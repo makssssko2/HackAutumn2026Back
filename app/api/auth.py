@@ -3,16 +3,17 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
-from app.core.security import current_user, token_hash, verify_password
+from app.core.security import current_user, hash_password, token_hash, verify_password
 from app.domain.formatters import user_out
 from app.domain.services import audit
 from app.models import AuthSession, User
 from app.repositories.auth import revoke_session
-from app.repositories.users import get_user_by_login
-from app.schemas import LoginIn
+from app.repositories.users import get_user_by_login, revoke_user_sessions
+from app.schemas import LoginIn, PasswordChange, ProfilePatch
 
 router = APIRouter(prefix='/api/v1/auth', tags=['Auth'])
 
@@ -45,6 +46,42 @@ def login(data: LoginIn, request: Request, response: Response, db: Session = Dep
 @router.get('/me')
 def me(user: User = Depends(current_user)):
     return user_out(user)
+
+
+@router.patch('/me')
+def update_me(data: ProfilePatch, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    if user.name != data.name:
+        user.name = data.name
+        audit(db, user.login, 'profile.updated', user.id, fields=['name'])
+        db.commit()
+    return user_out(user)
+
+
+@router.post('/password')
+def change_password(data: PasswordChange, response: Response,
+                    user: User = Depends(current_user), db: Session = Depends(get_db)):
+    key = f'password:{user.id}'
+    now = datetime.now(timezone.utc)
+    login_attempts[key] = [s for s in login_attempts[key] if now - s < timedelta(minutes=1)]
+    if len(login_attempts[key]) >= 10:
+        raise HTTPException(429, 'Слишком много попыток. Попробуйте через минуту')
+    if not verify_password(data.current_password, user.password_hash):
+        login_attempts[key].append(now)
+        raise HTTPException(400, 'Текущий пароль указан неверно')
+    if data.current_password == data.new_password:
+        raise HTTPException(422, 'Новый пароль должен отличаться от текущего')
+    # Only one concurrent change using this password may succeed.
+    result = db.execute(update(User).where(
+        User.id == user.id, User.password_hash == user.password_hash, User.active.is_(True),
+        User.deleted.is_(False),
+    ).values(password_hash=hash_password(data.new_password)), execution_options={'synchronize_session': False})
+    if result.rowcount != 1:
+        raise HTTPException(409, 'Пароль уже изменён. Войдите снова')
+    revoke_user_sessions(db, user.id)
+    audit(db, user.login, 'profile.password_changed', user.id)
+    db.commit()
+    response.delete_cookie('ik_session', path='/api')
+    return {'ok': True}
 
 
 @router.post('/logout')

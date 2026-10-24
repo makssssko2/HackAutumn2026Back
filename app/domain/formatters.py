@@ -10,4 +10,4 @@ def public(model, exclude: tuple = ()) -> dict:
 
 
 def user_out(user) -> dict:
-    return public(user, ('password_hash',))
+    return public(user, ('password_hash', 'admin_config_password_hash'))

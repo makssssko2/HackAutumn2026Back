@@ -15,10 +15,18 @@ def bootstrap():
         if user and user.role != 'admin':
             raise RuntimeError('ADMIN_LOGIN совпадает с логином обычного пользователя')
         if not user:
-            db.add(User(login=settings.admin_login, name='Администратор', role='admin', password_hash=hash_password(settings.admin_password)))
-        elif not verify_password(settings.admin_password, user.password_hash):
-            user.password_hash = hash_password(settings.admin_password)
-            db.execute(delete(AuthSession).where(AuthSession.user_id == user.id))
+            password_hash = hash_password(settings.admin_password)
+            db.add(User(login=settings.admin_login, name='Администратор', role='admin',
+                        password_hash=password_hash, admin_config_password_hash=password_hash))
+        else:
+            # Track the last server-configured credential separately. A profile
+            # password survives restarts; changing ADMIN_PASSWORD still recovers access.
+            if user.admin_config_password_hash is None:
+                user.admin_config_password_hash = user.password_hash
+            if not verify_password(settings.admin_password, user.admin_config_password_hash):
+                user.password_hash = hash_password(settings.admin_password)
+                user.admin_config_password_hash = user.password_hash
+                db.execute(delete(AuthSession).where(AuthSession.user_id == user.id))
         if user:
             user.active = True
         if not db.scalar(select(Channel).where(Channel.kind == 'inapp')):
