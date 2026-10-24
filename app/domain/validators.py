@@ -19,6 +19,11 @@ def check_channel(data) -> None:
             raise HTTPException(422, str(exc) if isinstance(exc, ValueError) else 'Не удалось проверить адрес webhook')
     if data.kind == 'telegram' and data.config.get('chat_id') and not re.fullmatch(r'-?\d+', data.config['chat_id']):
         raise HTTPException(422, 'Chat ID должен быть числом')
+    if data.kind in ('vk_teams', 'mattermost'):
+        if not data.connection_id:
+            raise HTTPException(422, 'Укажите connection_id интеграции')
+        if not data.remote_chat_id:
+            raise HTTPException(422, 'Укажите remote_chat_id чата')
 
 
 def check_group(db: Session, data) -> None:
