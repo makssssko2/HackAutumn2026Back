@@ -17,13 +17,27 @@ from app.services import audit, confirm_occurrence
 dispatcher = Dispatcher()
 
 
-@dispatcher.message(Command('start', 'help'))
+@dispatcher.message(Command('help'))
 async def help_message(message: Message):
-    await message.answer('Invoice Keeper\n\nДобавьте бота в группу и привяжите чат командой /connect из панели администратора. Оплату счета может подтвердить любой участник подключенного чата. Все оплаты демонстрационные.')
+    await message.answer('Invoice Keeper\n\nВ панели администратора нажмите «Подключить чат», затем «Выбрать группу в Telegram». Оплату счета может подтвердить любой участник подключенного чата. Все оплаты демонстрационные.')
+
+
+@dispatcher.message(Command('start'))
+async def start(message: Message, bot: Bot):
+    parts = (message.text or '').split(maxsplit=1)
+    if len(parts) == 2:
+        await connect_chat(message, bot, parts[1].strip())
+    else:
+        await help_message(message)
 
 
 @dispatcher.message(Command('connect'))
 async def connect(message: Message, bot: Bot):
+    parts = (message.text or '').split(maxsplit=1)
+    await connect_chat(message, bot, parts[1].strip() if len(parts) == 2 else '')
+
+
+async def connect_chat(message: Message, bot: Bot, token: str):
     if message.chat.type not in ('group', 'supergroup') or not message.from_user:
         await message.answer('Выполните команду в группе, где вы администратор.')
         return
@@ -31,10 +45,9 @@ async def connect(message: Message, bot: Bot):
     if member.status not in ('creator', 'administrator'):
         await message.answer('Привязать чат может его администратор.')
         return
-    parts = (message.text or '').split(maxsplit=1)
     with SessionLocal() as db:
         channel_id = db.scalar(delete(ChannelLink).where(
-            ChannelLink.token == (parts[1].strip() if len(parts) == 2 else ''),
+            ChannelLink.token == token,
             ChannelLink.expires_at >= utcnow(),
         ).returning(ChannelLink.channel_id))
         if not channel_id:

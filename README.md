@@ -41,8 +41,8 @@ Do not run the local API on port 8000 while the Docker API uses that port. Local
 
 1. Open the official https://t.me/BotFather, run `/newbot`, and create a bot. Put the issued token in `Back/.env`: `TELEGRAM_BOT_TOKEN=your_token`. This ignored file is server configuration; no token belongs in Front or in a group message.
 2. From Back, run `docker compose --profile telegram up -d --build --force-recreate api worker bot`. This recreates all three services with the new token. For a local Python setup, restart API and worker, then run `python -m app.telegram_bot`.
-3. In the admin UI, add a Telegram channel and click **Подключить чат**.
-4. Add the bot to the group and allow it to send messages and documents. A group administrator runs the one-time `/connect CODE` command within ten minutes. Address it explicitly as `/connect@your_bot_username CODE` so it also works with Telegram privacy mode. An alternative for API clients is creating a channel with `config.chat_id`.
+3. In the admin UI, add a Telegram channel and click **Подключить чат**, then **Выбрать группу в Telegram**.
+4. Telegram opens its group selector. Choose a group where you are an administrator and confirm adding the bot. The `startgroup` link passes the one-time code automatically; no command needs to be typed. Links expire in ten minutes. The bot must be allowed to send messages and documents. The `/connect CODE` handler remains available for older API clients; `config.chat_id` is another API option.
 5. Use **Тест**, then inspect **Уведомления**. A running worker sends queued events.
 
 Any participant in a connected target chat can use **Оплатить**, then confirm demo payment, without a web account. The confirmation button belongs to the participant who opened it. **Уже оплачено** records an external payment without fabricating a demo receipt. Bot callbacks cannot administer templates or users. They are validated against connected chats and a delivery for that specific invoice. Web/API access requires the administrator account; participant login and old participant sessions are rejected server-side.
@@ -53,9 +53,23 @@ The same domain service handles web and bot confirmation. A conditional revision
 
 Default broadcast means all active configured channels. An administrator can create named audience groups containing channel IDs and select groups for a recurring payment. Repeated recipients are deduplicated. In-app events retain a complete shared journal. Groups affect delivery, not web visibility.
 
-- Email: set `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`; optionally username/password and STARTTLS. Each email channel names one recipient.
+- Email: set `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`, and provider credentials. `SMTP_SSL=true` enables implicit TLS (usually port 465); `SMTP_SSL=false` with `SMTP_STARTTLS=true` enables STARTTLS (usually 587). Implicit TLS takes precedence over STARTTLS. Both modes verify TLS certificates. Each email channel names one recipient.
 - Webhook: HTTP(S) JSON, no redirects, public addresses by default. `X-Invoice-Event-ID` is stable across retries. `X-Invoice-Signature` is the hex HMAC-SHA256 of the exact request body using the channel secret. Use the event ID to deduplicate on the receiver. Private destinations are only allowed when explicitly configured with `ALLOW_PRIVATE_WEBHOOKS=true` for a trusted development setup.
 - In-app: enabled automatically as the administrator's delivery journal. It has no participant portal or payment controls.
+
+SMTP settings describe the **sender**, not the recipients. The VPS runs this application and connects to the sender's existing mail service; it does not need to host a mail server. For example, create a dedicated Yandex mailbox, enable mail-client access and create a Mail app password, then configure:
+
+```dotenv
+SMTP_HOST=smtp.yandex.ru
+SMTP_PORT=465
+SMTP_SSL=true
+SMTP_STARTTLS=false
+SMTP_USERNAME=your_mailbox_login
+SMTP_PASSWORD=your_mail_app_password
+SMTP_FROM=your_mailbox_login@yandex.ru
+```
+
+Use your real sender login, app password and address. Provider instructions: https://yandex.ru/support/yandex-360/customers/mail/ru/mail-clients/others. After changing the ignored `.env`, run `docker compose up -d --force-recreate api worker` from Back. Add an **Email через SMTP** channel in the admin panel with the recipient's address, then use **Тест** and inspect the delivery journal. Recipient passwords are never needed. Live SMTP verification requires sender credentials; adapters are tested in both TLS modes.
 
 Delivery jobs are durable and claimed atomically. Ordinary retries and restarts do not enqueue duplicate reminders for an occurrence/channel/event. Definite failures retry with backoff up to five times. A timeout or interrupted sender has an unknown result: status becomes **Проверьте доставку**, requiring inspection before manual retry. Telegram and SMTP do not provide end-to-end exactly-once delivery guarantees.
 

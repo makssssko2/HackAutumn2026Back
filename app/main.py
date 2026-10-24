@@ -21,7 +21,7 @@ from app.bootstrap import bootstrap
 from app.config import settings, today
 from app.db import Base, engine, get_db
 from app.models import Attachment, AuditLog, AudienceGroup, AuthSession, Channel, ChannelLink, Delivery, Occurrence, Receipt, RecurringPayment, User, uid, utcnow
-from app.notifications import validate_webhook
+from app.notifications import telegram_call, validate_webhook
 from app.receipts import receipt_html
 from app.schemas import ChannelIn, GroupIn, LinkIn, LoginIn, OccurrencePatch, RecurringIn, UserIn, UserPatch
 from app.security import admin_user, current_user, hash_password, token_hash, verify_password
@@ -294,11 +294,17 @@ def telegram_link(channel_id: str, user: User = Depends(admin_user), db: Session
     row = get_or_404(db, Channel, channel_id)
     if row.kind != 'telegram':
         raise HTTPException(422, 'Это не Telegram-канал')
+    if not settings.telegram_bot_token:
+        raise HTTPException(409, 'Сначала задайте TELEGRAM_BOT_TOKEN в Back/.env и перезапустите сервисы')
+    try:
+        username = telegram_call('getMe', {})['username']
+    except Exception:
+        raise HTTPException(502, 'Не удалось получить имя бота. Проверьте токен и соединение с Telegram')
     token = secrets.token_urlsafe(18)
     db.add(ChannelLink(token=token, channel_id=row.id, expires_at=utcnow() + timedelta(minutes=10)))
     audit(db, user.login, 'channel.link_requested', row.id)
     db.commit()
-    return {'command': f'/connect {token}', 'expires_in': 600}
+    return {'url': f'https://t.me/{username}?startgroup={token}', 'command': f'/connect {token}', 'expires_in': 600}
 
 
 @app.post(prefix + '/channels/{channel_id}/test', tags=['Notifications'])

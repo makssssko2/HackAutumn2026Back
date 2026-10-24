@@ -4,7 +4,8 @@ import hmac
 import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
-from threading import Barrier
+from threading import Barrier, Thread
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -52,19 +53,69 @@ def test_webhook_signature_and_stable_event_id(db_factory, monkeypatch):
         assert json.loads(captured['content'])['payment']['amount'] == '12.50'
 
 
-def test_smtp_adapter_uses_configured_recipient_and_message_id(db_factory, monkeypatch):
+def test_webhook_roundtrip_and_retry_through_worker(admin, db_factory, monkeypatch):
+    import app.notifications as notifications
+    monkeypatch.setattr(notifications, 'SessionLocal', db_factory)
+    monkeypatch.setattr(notifications.settings, 'allow_private_webhooks', True)
+    received = []
+    class Receiver(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers['Content-Length']))
+            received.append((body, self.headers['X-Invoice-Event-ID'], self.headers['X-Invoice-Signature']))
+            self.send_response(503 if len(received) == 1 else 204)
+            self.end_headers()
+        def log_message(self, *args): pass
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Receiver)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        result = admin.post('/api/v1/channels', json={'name': 'Local receiver', 'kind': 'webhook', 'config': {'url': f'http://127.0.0.1:{server.server_port}/events', 'secret': 'receiver-secret'}})
+        assert result.status_code == 201
+        cid = result.json()['id']
+        result = admin.post('/api/v1/recurring-payments', json={'title': 'Webhook roundtrip', 'amount': '10', 'currency': 'EUR', 'first_due_date': str(today())})
+        assert result.status_code == 201
+        notifications.process_deliveries()
+        with db_factory() as db:
+            delivery = db.scalar(select(Delivery).where(Delivery.channel_id == cid))
+            assert delivery.status == 'retry' and delivery.attempts == 1
+            delivery.next_attempt_at = utcnow() - timedelta(seconds=1)
+            db.commit(); did = delivery.id
+        notifications.process_deliveries()
+        notifications.process_deliveries()
+        assert len(received) == 2
+        assert received[0] == received[1]
+        body, event_id, signature = received[1]
+        assert event_id == did
+        assert signature == hmac.new(b'receiver-secret', body, hashlib.sha256).hexdigest()
+        assert json.loads(body)['payment']['title'] == 'Webhook roundtrip'
+        with db_factory() as db:
+            assert db.get(Delivery, did).status == 'sent'
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+@pytest.mark.parametrize('implicit_ssl', [False, True])
+def test_smtp_adapter_uses_configured_recipient_and_message_id(db_factory, monkeypatch, implicit_ssl):
     import app.notifications as notifications
     captured = {}
     class SMTP:
         def __enter__(self): return self
         def __exit__(self, *args): pass
-        def starttls(self): captured['tls'] = True
+        def starttls(self, context): captured['tls'] = context.check_hostname
         def login(self, *args): captured['login'] = True
         def send_message(self, msg): captured['message'] = msg
     monkeypatch.setattr(notifications.settings, 'smtp_host', 'smtp.example.com')
     monkeypatch.setattr(notifications.settings, 'smtp_username', 'test')
     monkeypatch.setattr(notifications.settings, 'smtp_starttls', True)
-    monkeypatch.setattr(notifications.smtplib, 'SMTP', lambda *args, **kwargs: SMTP())
+    monkeypatch.setattr(notifications.settings, 'smtp_ssl', implicit_ssl)
+    def factory(*args, **kwargs):
+        captured['ssl'] = kwargs.get('context') is not None
+        if implicit_ssl:
+            assert kwargs['context'].check_hostname
+        return SMTP()
+    monkeypatch.setattr(notifications.smtplib, 'SMTP_SSL' if implicit_ssl else 'SMTP', factory)
     with db_factory() as db:
         row = sample(db)
         channel = Channel(name='Email', kind='email', config={'email': 'team@example.com'})
@@ -72,7 +123,9 @@ def test_smtp_adapter_uses_configured_recipient_and_message_id(db_factory, monke
         delivery = Delivery(occurrence_id=row.id, channel_id=channel.id, event='reminder')
         db.add(delivery); db.flush()
         notifications.send_delivery(db, delivery, channel, row)
-        assert captured['tls'] and captured['login']
+        assert captured['login']
+        assert captured['ssl'] is implicit_ssl
+        assert bool(captured.get('tls')) is not implicit_ssl
         assert captured['message']['To'] == 'team@example.com'
         assert delivery.id in captured['message']['Message-ID']
 
@@ -134,6 +187,62 @@ def test_connect_code_is_single_use_and_requires_group_admin(db_factory, monkeyp
     with db_factory() as db:
         assert db.get(ChannelLink, 'test-code') is None
         assert db.get(Channel, cid).config['chat_id'] == '-100123'
+
+
+def test_startgroup_links_existing_bot_without_web_account(db_factory, monkeypatch):
+    import app.telegram_bot as telegram
+    monkeypatch.setattr(telegram, 'SessionLocal', db_factory)
+    monkeypatch.setattr(Message, 'answer', AsyncMock())
+    with db_factory() as db:
+        channel = Channel(name='Group selector', kind='telegram', config={})
+        db.add(channel); db.flush()
+        db.add(ChannelLink(token='startgroup-code', channel_id=channel.id, expires_at=utcnow() + timedelta(minutes=10)))
+        db.commit(); cid = channel.id
+    bot = SimpleNamespace(get_chat_member=AsyncMock(return_value=SimpleNamespace(status='member')))
+    asyncio.run(telegram.start(message(text='/start@SampleBot startgroup-code'), bot))
+    with db_factory() as db:
+        assert db.get(ChannelLink, 'startgroup-code') is not None
+    bot.get_chat_member.return_value.status = 'administrator'
+    asyncio.run(telegram.start(message(text='/start@SampleBot startgroup-code'), bot))
+    # Replay from another chat cannot replace the first binding.
+    asyncio.run(telegram.start(message(-100999, text='/start@SampleBot startgroup-code'), bot))
+    with db_factory() as db:
+        assert db.get(Channel, cid).config['chat_id'] == '-100123'
+        assert db.get(ChannelLink, 'startgroup-code') is None
+
+
+def test_startgroup_rejects_private_chat_and_expired_code(db_factory, monkeypatch):
+    import app.telegram_bot as telegram
+    monkeypatch.setattr(telegram, 'SessionLocal', db_factory)
+    monkeypatch.setattr(Message, 'answer', AsyncMock())
+    with db_factory() as db:
+        channel = Channel(name='Group selector', kind='telegram', config={})
+        db.add(channel); db.flush()
+        db.add(ChannelLink(token='expired-code', channel_id=channel.id, expires_at=utcnow() - timedelta(minutes=1)))
+        db.commit(); cid = channel.id
+    bot = SimpleNamespace(get_chat_member=AsyncMock(return_value=SimpleNamespace(status='administrator')))
+    private = Message.model_validate({'message_id': 7, 'date': utcnow(), 'chat': {'id': 11, 'type': 'private', 'first_name': 'Tester'}, 'from': {'id': 11, 'is_bot': False, 'first_name': 'Tester'}, 'text': '/start expired-code'})
+    asyncio.run(telegram.start(private, bot))
+    assert bot.get_chat_member.await_count == 0
+    asyncio.run(telegram.start(message(text='/start@SampleBot expired-code'), bot))
+    with db_factory() as db:
+        assert db.get(Channel, cid).config == {}
+
+
+def test_api_returns_startgroup_url_without_exposing_bot_token(admin, db_factory, monkeypatch):
+    import app.main as main
+    monkeypatch.setattr(main.settings, 'telegram_bot_token', 'private-token')
+    monkeypatch.setattr(main, 'telegram_call', lambda method, payload: {'username': 'SampleBot'})
+    channel = admin.post('/api/v1/channels', json={'name': 'Team', 'kind': 'telegram'}).json()
+    response = admin.post('/api/v1/channels/' + channel['id'] + '/telegram-link')
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['url'].startswith('https://t.me/SampleBot?startgroup=')
+    token = payload['url'].split('startgroup=')[1]
+    assert payload['command'] == '/connect ' + token
+    assert 'private-token' not in response.text
+    with db_factory() as db:
+        assert db.get(ChannelLink, token).channel_id == channel['id']
 
 
 def test_admin_configuration_revokes_previous_admin(db_factory, monkeypatch):

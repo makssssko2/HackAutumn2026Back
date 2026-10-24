@@ -4,6 +4,7 @@ import ipaddress
 import json
 import logging
 import smtplib
+import ssl
 import socket
 from datetime import timedelta
 from email.message import EmailMessage
@@ -90,9 +91,12 @@ def send_delivery(db, delivery: Delivery, channel: Channel, row: Occurrence):
         message['To'] = channel.config['email']
         message['Message-ID'] = f'<{delivery.id}@invoice-keeper.local>'
         message.set_content(text)
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=15) as smtp:
-            if settings.smtp_starttls:
-                smtp.starttls()
+        context = ssl.create_default_context()
+        factory = smtplib.SMTP_SSL if settings.smtp_ssl else smtplib.SMTP
+        options = {'context': context} if settings.smtp_ssl else {}
+        with factory(settings.smtp_host, settings.smtp_port, timeout=15, **options) as smtp:
+            if settings.smtp_starttls and not settings.smtp_ssl:
+                smtp.starttls(context=context)
             if settings.smtp_username:
                 smtp.login(settings.smtp_username, settings.smtp_password)
             smtp.send_message(message)

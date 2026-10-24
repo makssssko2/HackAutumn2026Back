@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     smtp_password: str = ''
     smtp_from: str = 'invoice-keeper@localhost'
     smtp_starttls: bool = True
+    smtp_ssl: bool = False
     worker_interval_seconds: int = 30
     allow_private_webhooks: bool = False
     data_dir: Path = Path('data')
