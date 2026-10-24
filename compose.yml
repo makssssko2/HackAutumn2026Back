@@ -42,6 +42,16 @@ services:
     depends_on:
       api:
         condition: service_healthy
+  bitrix-events:
+    restart: unless-stopped
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://invoice_keeper:${POSTGRES_PASSWORD:-local-development-only}@db:5432/invoice_keeper
+    command: ["python", "-m", "app.bitrix24_runner"]
+    depends_on:
+      api:
+        condition: service_healthy
   bot:
     restart: unless-stopped
     build: .

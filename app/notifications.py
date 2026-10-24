@@ -141,7 +141,7 @@ def send_delivery(db, delivery: Delivery, channel: Channel, row: Occurrence):
             if not 200 <= response.status_code < 300:
                 raise ValueError(f'Webhook вернул HTTP {response.status_code}')
         return None
-    if channel.kind in ('vk_teams', 'mattermost'):
+    if channel.kind in ('vk_teams', 'mattermost', 'bitrix24'):
         connection = db.get(IntegrationConnection, channel.connection_id)
         if not connection or not connection.active:
             raise IntegrationError('connection_unavailable', 'Интеграция отключена')
