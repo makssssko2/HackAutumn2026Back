@@ -1,19 +1,28 @@
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models import Channel, Delivery, Occurrence, Receipt, RecurringPayment
 
 
-def list_deliveries_with_context(db: Session, limit: int = 300):
+def deliveries_query(status=None, channel_id=None, q=None):
     query = (
         select(Delivery, Occurrence, Channel, RecurringPayment.payment_type, RecurringPayment.description)
+        .select_from(Delivery)
         .join(Occurrence, Delivery.occurrence_id == Occurrence.id)
         .join(Channel, Delivery.channel_id == Channel.id)
         .join(RecurringPayment, Occurrence.recurring_id == RecurringPayment.id)
-        .order_by(Delivery.created_at.desc())
-        .limit(limit)
     )
-    return list(db.execute(query))
+    if status:
+        query = query.where(Delivery.status == status)
+    if channel_id:
+        query = query.where(Delivery.channel_id == channel_id)
+    if q:
+        query = query.where(or_(Occurrence.title.icontains(q, autoescape=True), RecurringPayment.description.icontains(q, autoescape=True), Channel.name.icontains(q, autoescape=True)))
+    return query.order_by(Delivery.created_at.desc(), Delivery.id)
+
+
+def list_deliveries_with_context(db: Session, limit: int = 300):
+    return list(db.execute(deliveries_query().limit(limit)))
 
 
 def get_receipt_map(db: Session, occurrence_ids: set[str]) -> dict[str, str]:

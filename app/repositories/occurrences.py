@@ -5,8 +5,7 @@ from app.core.config import today
 from app.models import AuditLog, Attachment, Occurrence, Receipt, RecurringPayment
 
 
-def list_occurrences(
-    db: Session,
+def occurrences_query(
     date_from=None,
     date_to=None,
     status: str | None = None,
@@ -14,8 +13,10 @@ def list_occurrences(
     q: str | None = None,
     recurring_id: str | None = None,
     payment_type: str | None = None,
-    limit: int = 1000,
-) -> list[Occurrence]:
+    exclude_id: str | None = None,
+    sort: str = 'due_date',
+    direction: str = 'asc',
+):
     query = select(Occurrence)
     if date_from:
         query = query.where(Occurrence.due_date >= date_from)
@@ -25,6 +26,8 @@ def list_occurrences(
         query = query.where(Occurrence.currency == currency)
     if recurring_id:
         query = query.where(Occurrence.recurring_id == recurring_id)
+    if exclude_id:
+        query = query.where(Occurrence.id != exclude_id)
     if payment_type:
         query = query.where(Occurrence.recurring_id.in_(
             select(RecurringPayment.id).where(RecurringPayment.payment_type == payment_type)
@@ -39,8 +42,15 @@ def list_occurrences(
         query = query.where(Occurrence.paid.is_(False), Occurrence.cancelled.is_(False))
     elif status == 'cancelled':
         query = query.where(Occurrence.cancelled.is_(True))
-    query = query.order_by(Occurrence.due_date, Occurrence.title).limit(limit)
-    return list(db.scalars(query))
+    elif status == 'active':
+        query = query.where(Occurrence.cancelled.is_(False))
+    column = Occurrence.paid_at if sort == 'paid_at' else Occurrence.due_date
+    ordered = column.desc() if direction == 'desc' else column.asc()
+    return query.order_by(ordered.nulls_last(), Occurrence.title, Occurrence.id)
+
+
+def list_occurrences(db: Session, limit: int = 1000, **filters) -> list[Occurrence]:
+    return list(db.scalars(occurrences_query(**filters).limit(limit)))
 
 
 def get_occurrence(db: Session, oid: str) -> Occurrence | None:

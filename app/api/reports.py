@@ -1,18 +1,34 @@
 import calendar
 from datetime import date
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import today
 from app.core.db import get_db
 from app.core.security import current_user
 from app.domain.services import generate_occurrences, summarize
-from app.models import User
+from app.models import Occurrence, User
 from app.repositories.occurrences import list_occurrences
 from app.repositories.payments import list_active_payments
 
 router = APIRouter(prefix='/api/v1/payments', tags=['Reports'])
+
+
+@router.get('/calendar')
+def calendar_totals(date_from: date, date_to: date, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    if not 0 <= (date_to - date_from).days <= 62:
+        raise HTTPException(422, 'Выберите диапазон календаря не длиннее 63 дней')
+    rows = db.execute(select(Occurrence.due_date, Occurrence.currency, func.count(), func.sum(Occurrence.amount)).where(
+        Occurrence.due_date >= date_from, Occurrence.due_date <= date_to, Occurrence.cancelled.is_(False)
+    ).group_by(Occurrence.due_date, Occurrence.currency).order_by(Occurrence.due_date))
+    days = {}
+    for due, currency, count, amount in rows:
+        entry = days.setdefault(due, {'date': due, 'count': 0, 'currencies': {}})
+        entry['count'] += count
+        entry['currencies'][currency] = str(amount)
+    return {'days': list(days.values())}
 
 
 @router.get('/summary')

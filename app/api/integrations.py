@@ -14,6 +14,7 @@ from app.integrations.security import decrypt_credentials, encrypt_credentials
 from app.models import IntegrationConnection, IntegrationInbox, User, utcnow
 from app.repositories.base import get_or_404
 from app.repositories.integrations import list_connections
+from app.repositories.pagination import PageRequest, collection_page
 from app.schemas import IntegrationConnectionIn, IntegrationConnectionPatch
 
 router = APIRouter(prefix='/api/v1/integrations', tags=['Integrations'])
@@ -48,8 +49,9 @@ def providers(user: User = Depends(admin_user)):
 
 
 @router.get('/connections')
-def connections(user: User = Depends(admin_user), db: Session = Depends(get_db)):
-    return [connection_out(row) for row in list_connections(db)]
+def connections(pagination: PageRequest = Depends(), q: str | None = None, user: User = Depends(admin_user), db: Session = Depends(get_db)):
+    result = collection_page(db, IntegrationConnection, pagination, order_by=(IntegrationConnection.created_at.desc(),), q=q, fields=(IntegrationConnection.name, IntegrationConnection.provider))
+    return result.response([connection_out(row) for row in result.items])
 
 
 @router.post('/connections', status_code=201)

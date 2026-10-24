@@ -2,6 +2,7 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from app.core.config import today
 from app.core.db import get_db
@@ -11,17 +12,22 @@ from app.domain.services import audit, occurrence_out, queue_event
 from app.models import Delivery, Occurrence, User, utcnow
 from app.repositories.base import get_or_404
 from app.repositories.deliveries import get_receipt_map, list_deliveries_with_context, list_reminder_deliveries
+from app.repositories.deliveries import deliveries_query
+from app.repositories.pagination import PageRequest, fetch_page
 from app.repositories.occurrences import get_occurrence_payment
 
 router = APIRouter(prefix='/api/v1/notifications', tags=['Notifications'])
 
 
 @router.get('')
-def notifications(user: User = Depends(admin_user), db: Session = Depends(get_db)):
-    rows = list_deliveries_with_context(db, limit=300)
+def notifications(pagination: PageRequest = Depends(), status: str | None = None, channel_id: str | None = None, q: str | None = None, user: User = Depends(admin_user), db: Session = Depends(get_db)):
+    query = deliveries_query(status=status, channel_id=channel_id, q=q)
+    result = fetch_page(db, query, pagination, scalar=False, legacy_limit=300)
+    rows = result.items
     occurrence_ids = {row.id for _, row, _, _, _ in rows}
     receipts = get_receipt_map(db, occurrence_ids)
-    return [
+    counts = dict(db.execute(query.with_only_columns(Delivery.status, func.count()).order_by(None).group_by(Delivery.status)).all()) if pagination.requested else {}
+    return result.response([
         {
             **public(delivery),
             'title': row.title,
@@ -35,7 +41,7 @@ def notifications(user: User = Depends(admin_user), db: Session = Depends(get_db
             'receipt_id': receipts.get(row.id),
         }
         for delivery, row, channel, payment_type, description in rows
-    ]
+    ], stats={'failed': sum(counts.get(s, 0) for s in ('failed', 'uncertain')), 'pending': sum(counts.get(s, 0) for s in ('pending', 'sending', 'retry'))})
 
 
 @router.post('/{delivery_id}/retry')

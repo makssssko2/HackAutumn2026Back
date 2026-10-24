@@ -9,6 +9,7 @@ from app.domain.validators import check_group
 from app.models import AudienceGroup, User
 from app.repositories.base import get_or_404
 from app.repositories.groups import list_groups
+from app.repositories.pagination import PageRequest, collection_page
 from app.repositories.payments import is_group_used_by_active_payment
 from app.schemas import GroupIn
 
@@ -16,8 +17,9 @@ router = APIRouter(prefix='/api/v1/groups', tags=['Groups'])
 
 
 @router.get('')
-def groups(user: User = Depends(admin_user), db: Session = Depends(get_db)):
-    return [public(row) for row in list_groups(db)]
+def groups(pagination: PageRequest = Depends(), q: str | None = None, user: User = Depends(admin_user), db: Session = Depends(get_db)):
+    result = collection_page(db, AudienceGroup, pagination, order_by=(AudienceGroup.name,), q=q, fields=(AudienceGroup.name, AudienceGroup.description))
+    return result.response([public(row) for row in result.items])
 
 
 @router.post('', status_code=201)

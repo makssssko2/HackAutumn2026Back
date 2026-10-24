@@ -12,21 +12,23 @@ from app.domain.validators import check_channel
 from app.models import Channel, ChannelLink, Delivery, IntegrationConnection, User, uid, utcnow
 from app.repositories.base import get_or_404
 from app.repositories.channels import latest_active_occurrence, list_channels, revoke_channel_payment_links
+from app.repositories.pagination import PageRequest, collection_page
 from app.schemas import ChannelIn
 
 router = APIRouter(prefix='/api/v1/channels', tags=['Notifications'])
 
 
 @router.get('')
-def channels(user: User = Depends(admin_user), db: Session = Depends(get_db)):
-    return [
+def channels(pagination: PageRequest = Depends(), q: str | None = None, user: User = Depends(admin_user), db: Session = Depends(get_db)):
+    result = collection_page(db, Channel, pagination, order_by=(Channel.name,), q=q, fields=(Channel.name, Channel.kind))
+    return result.response([
         {
             **public(row, ('config', 'connected_at')),
             'config': {k: v for k, v in row.config.items() if k != 'secret'},
             'has_secret': bool(row.config.get('secret')),
         }
-        for row in list_channels(db)
-    ]
+        for row in result.items
+    ])
 
 
 @router.post('', status_code=201)

@@ -8,15 +8,16 @@ from app.domain.services import create_payment, stop_payment
 from app.models import RecurringPayment, User
 from app.repositories.base import get_or_404
 from app.repositories.payments import list_payments
+from app.repositories.pagination import PageRequest, collection_page
 from app.schemas import RecurringIn
 
 router = APIRouter(prefix='/api/v1/recurring-payments', tags=['Payments'])
 
 
 @router.get('')
-def recurring(user: User = Depends(current_user), db: Session = Depends(get_db)):
-    rows = list_payments(db)
-    return [{**public(row, ('payment_type',)), 'amount': str(row.amount)} for row in rows]
+def recurring(pagination: PageRequest = Depends(), q: str | None = None, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    result = collection_page(db, RecurringPayment, pagination, conditions=(RecurringPayment.payment_type == 'recurring',), order_by=(RecurringPayment.created_at.desc(),), q=q, fields=(RecurringPayment.title, RecurringPayment.description))
+    return result.response([{**public(row, ('payment_type',)), 'amount': str(row.amount)} for row in result.items])
 
 
 @router.post('', status_code=201)

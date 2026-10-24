@@ -8,14 +8,16 @@ from app.domain.services import audit
 from app.models import User
 from app.repositories.base import get_or_404
 from app.repositories.users import list_users, login_exists, revoke_user_sessions
+from app.repositories.pagination import PageRequest, collection_page
 from app.schemas import UserIn, UserPatch
 
 router = APIRouter(prefix='/api/v1/users', tags=['Users'])
 
 
 @router.get('')
-def users(user: User = Depends(admin_user), db: Session = Depends(get_db)):
-    return [user_out(row) for row in list_users(db)]
+def users(pagination: PageRequest = Depends(), q: str | None = None, user: User = Depends(admin_user), db: Session = Depends(get_db)):
+    result = collection_page(db, User, pagination, conditions=(User.deleted.is_(False),), order_by=(User.created_at,), q=q, fields=(User.name, User.login))
+    return result.response([user_out(row) for row in result.items])
 
 
 @router.post('', status_code=201)
