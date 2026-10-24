@@ -4,6 +4,7 @@ from datetime import timezone
 
 from fastapi import HTTPException
 from sqlalchemy import delete
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.domain.services import confirm_occurrence
@@ -37,7 +38,7 @@ def create_actions(db: Session, delivery: Delivery, channel: Channel, occurrence
 
 def handle_callback(db: Session, connection: IntegrationConnection, callback: Callback) -> dict:
     action = db.get(BotAction, callback.token)
-    if not action or action.connection_id != connection.id or action.provider != connection.provider:
+    if not connection.active or not action or action.connection_id != connection.id or action.provider != connection.provider:
         raise HTTPException(404, 'Действие не найдено или истекло')
     expires_at = action.expires_at.replace(tzinfo=timezone.utc) if action.expires_at.tzinfo is None else action.expires_at
     if action.consumed_at or expires_at < utcnow():
@@ -53,10 +54,11 @@ def handle_callback(db: Session, connection: IntegrationConnection, callback: Ca
         raise HTTPException(409, 'Счет уже изменен или канал отключен')
     action.consumed_at = utcnow()
     try:
-        confirm_occurrence(db, occurrence.id, f'{connection.provider}:{callback.user_id}', paid=True,
+        actor = f'{connection.provider}:{connection.id}:{callback.user_id}' if connection.provider == 'bitrix24' else f'{connection.provider}:{callback.user_id}'
+        confirm_occurrence(db, occurrence.id, actor, paid=True,
                            demo=True, expected_revision=action.revision)
-        db.commit()
-    except Exception:
+        db.flush()
+    except (HTTPException, SQLAlchemyError):
         db.rollback()
         raise
     return {'ok': True, 'text': 'Оплата подтверждена'}

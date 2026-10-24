@@ -66,4 +66,7 @@ def get_adapter(connection: IntegrationConnection) -> IntegrationAdapter:
     if connection.provider == 'vk_teams':
         from app.integrations.vk_teams import VkTeamsAdapter
         return VkTeamsAdapter()
+    if connection.provider == 'bitrix24':
+        from app.integrations.bitrix24 import Bitrix24Adapter
+        return Bitrix24Adapter()
     raise IntegrationError('unsupported_provider', f'Провайдер {connection.provider} не поддерживается')
