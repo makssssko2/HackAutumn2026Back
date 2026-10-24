@@ -9,7 +9,7 @@ from app.core.security import admin_user
 from app.domain.formatters import public
 from app.domain.services import audit
 from app.domain.validators import check_channel
-from app.models import Channel, ChannelLink, Delivery, User, uid, utcnow
+from app.models import Channel, ChannelLink, Delivery, IntegrationConnection, User, uid, utcnow
 from app.repositories.base import get_or_404
 from app.repositories.channels import latest_active_occurrence, list_channels, revoke_channel_payment_links
 from app.schemas import ChannelIn
@@ -32,6 +32,10 @@ def channels(user: User = Depends(admin_user), db: Session = Depends(get_db)):
 @router.post('', status_code=201)
 def add_channel(data: ChannelIn, user: User = Depends(admin_user), db: Session = Depends(get_db)):
     check_channel(data)
+    if data.kind in ('vk_teams', 'mattermost'):
+        connection = get_or_404(db, IntegrationConnection, data.connection_id)
+        if connection.provider != data.kind or not connection.active:
+            raise HTTPException(409, 'Интеграция недоступна или не соответствует типу канала')
     row = Channel(**data.model_dump())
     db.add(row)
     db.flush()
@@ -49,12 +53,17 @@ def update_channel(channel_id: str, data: ChannelIn, user: User = Depends(admin_
     if row.kind == 'inapp' and (not data.active or data.kind != 'inapp'):
         raise HTTPException(409, 'Внутренние уведомления должны оставаться включены')
     check_channel(data)
+    if data.kind in ('vk_teams', 'mattermost'):
+        connection = get_or_404(db, IntegrationConnection, data.connection_id)
+        if connection.provider != data.kind or not connection.active:
+            raise HTTPException(409, 'Интеграция недоступна или не соответствует типу канала')
     config = data.config.copy()
     if row.kind == data.kind == 'webhook' and 'secret' not in config and row.config.get('secret'):
         config['secret'] = row.config['secret']
     if row.kind == 'email' and (data.kind != 'email' or config.get('email') != row.config.get('email')):
         revoke_channel_payment_links(db, row.id)
     row.name, row.kind, row.config, row.active = data.name, data.kind, config, data.active
+    row.connection_id, row.remote_chat_id = data.connection_id, data.remote_chat_id
     if row.kind == 'telegram' and not row.config.get('chat_id'):
         row.connected_at = None
     elif row.connected_at is None:

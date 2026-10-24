@@ -96,9 +96,25 @@ class OccurrencePatch(BaseModel):
 
 class ChannelIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
-    kind: Literal['telegram', 'email', 'webhook', 'inapp']
+    kind: Literal['telegram', 'email', 'webhook', 'inapp', 'vk_teams', 'mattermost']
     config: dict[str, str] = Field(default_factory=dict)
     active: bool = True
+    connection_id: str | None = None
+    remote_chat_id: str | None = None
+
+
+class IntegrationConnectionIn(BaseModel):
+    provider: Literal['vk_teams', 'mattermost']
+    name: str = Field(min_length=1, max_length=120)
+    base_url: str = Field(min_length=1, max_length=500)
+    credentials: dict[str, str] = Field(min_length=1)
+
+
+class IntegrationConnectionPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    base_url: str | None = Field(default=None, min_length=1, max_length=500)
+    credentials: dict[str, str] | None = None
+    active: bool | None = None
 
 
 class GroupIn(BaseModel):
