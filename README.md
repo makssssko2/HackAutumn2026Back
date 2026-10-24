@@ -10,7 +10,7 @@ docker compose up -d --build
 docker compose exec api python -m app.seed
 ```
 
-Set `ADMIN_LOGIN` and `ADMIN_PASSWORD` in `.env`. The example uses `admin / change-me-before-use` for local development. The web application and authenticated HTTP API are administrator-only. Explicit demo seeding creates a sample participant record, eight example expenses, and audience groups. Participant records cannot sign in to the web application. Seeding is idempotent and never resets existing payments. No external channels are seeded.
+Set `ADMIN_LOGIN` and `ADMIN_PASSWORD` in `.env`. The example uses `admin / change-me-before-use` for local development. Both `admin` and active `user` accounts can sign in. Users can read payments, periods, reports, documents and receipts, and can confirm or correct demonstration payments. User management, payment/channel/group management, audit logs and delivery operations remain administrator-only. Explicit demo seeding creates a sample participant record, eight example expenses, and audience groups. Seeding is idempotent and never resets existing payments. No external channels are seeded.
 
 API: `http://localhost:8000`. Health: `/health`. Start the neighboring Front repository to sign in, then open `/api/v1/docs` in that same browser. Swagger and the live `/api/v1/openapi.json` require the session cookie. The committed `openapi.json` can be read without running the application.
 
@@ -45,7 +45,7 @@ Do not run the local API on port 8000 while the Docker API uses that port. Local
 4. Telegram opens its group selector. Choose a group where you are an administrator and confirm adding the bot. The `startgroup` link passes the one-time code automatically; no command needs to be typed. Links expire in ten minutes. The bot must be allowed to send messages and documents. The `/connect CODE` handler remains available for older API clients; `config.chat_id` is another API option.
 5. Use **Тест**, then inspect **Уведомления**. A running worker sends queued events.
 
-Any participant in a connected target chat can use **Оплатить**, then confirm demo payment, without a web account. The confirmation button belongs to the participant who opened it. **Оплачено ранее · выбрать дату** opens a calendar for the actual payment date, including overdue invoices. A confirmation step creates the demo receipt. Paid invoices offer **Исправить дату оплаты** and **Отменить отметку**. Due dates stay unchanged; delay is recomputed. Action buttons are bound to the initiating user and chat, expire after fifteen minutes, and reject stale invoice revisions. Colored native Telegram buttons emphasize payment, receipt and cancellation. Bot callbacks cannot administer templates or users. They are validated against connected chats and a delivery for that specific invoice. The admin web/API requires the administrator account; participant login and old participant sessions are rejected server-side.
+Any participant in a connected target chat can use **Оплатить**, then confirm demo payment, without a web account. The confirmation button belongs to the participant who opened it. **Оплачено ранее · выбрать дату** opens a calendar for the actual payment date, including overdue invoices. A confirmation step creates the demo receipt. Paid invoices offer **Исправить дату оплаты** and **Отменить отметку**. Due dates stay unchanged; delay is recomputed. Action buttons are bound to the initiating user and chat, expire after fifteen minutes, and reject stale invoice revisions. Colored native Telegram buttons emphasize payment, receipt and cancellation. Bot callbacks cannot administer templates or users. They are validated against connected chats and a delivery for that specific invoice. Ordinary users may use the web/API payment operations; participant Telegram actions do not require a web account.
 
 The same domain service handles web and bot confirmation. A conditional revision update permits one winner on simultaneous clicks. Demo receipts are sent as HTML files to the group and retained in the invoice card. They are labeled as demonstrations.
 
@@ -53,7 +53,11 @@ The same domain service handles web and bot confirmation. A conditional revision
 
 Default broadcast means all active configured channels. An administrator can create named audience groups containing channel IDs and select groups for a recurring payment. Repeated recipients are deduplicated. In-app events retain a complete shared journal. Groups affect delivery, not web visibility.
 
-A new channel becomes a delivery target from its connection moment: for Telegram this is the successful chat link, for email and webhook it is channel creation. Invoices issued earlier are not queued for that channel. Channels that already existed before this rule keep their historical delivery behavior.
+A new channel becomes eligible for future releases from its connection moment: for Telegram this is the successful chat link, for email and webhook it is channel creation. Invoices released earlier are not queued for that channel automatically. Channels that already existed before this rule keep their historical delivery behavior.
+
+Payment descriptions are part of the period projection and are included in the admin/user period API, in-app and webhook payloads, Telegram messages, plain-text/HTML email, public email invoice pages and demonstration receipts. The same field is used for recurring and one-time payments.
+
+Forecast periods are generated for budgeting but are not released to notification channels until their initial/reminder window is reached. A channel connected before release can receive that future period; a channel connected after release does not receive it retroactively. The worker automatically releases only the current three-day reminder window. It does not broadcast all old overdue debts after downtime. An administrator can explicitly request a missed reminder with `POST /api/v1/notifications/occurrences/{occurrence_id}/remind`. The endpoint is idempotent and refuses an uncertain delivery instead of blindly resending it.
 
 - Email: set `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`, and provider credentials. `SMTP_SSL=true` enables implicit TLS (usually port 465); `SMTP_SSL=false` with `SMTP_STARTTLS=true` enables STARTTLS (usually 587). Implicit TLS takes precedence over STARTTLS. Both modes verify TLS certificates. Each email channel names one recipient.
 - Webhook: HTTP(S) JSON, no redirects, public addresses by default. `X-Invoice-Event-ID` is stable across retries. `X-Invoice-Signature` is the hex HMAC-SHA256 of the exact request body using the channel secret. Use the event ID to deduplicate on the receiver. Private destinations are only allowed when explicitly configured with `ALLOW_PRIVATE_WEBHOOKS=true` for a trusted development setup.
@@ -87,6 +91,12 @@ Concurrent budget requests and worker runs use conflict-safe inserts for periods
 - Amounts are Decimal/Numeric; RUB, USD and EUR are summed separately. No exchange rates.
 - A generated receipt is voided after cancellation or date correction; date correction issues a replacement when a demo receipt existed. Audit history remains.
 - Files: PDF, PNG, JPEG, TXT up to 10 MiB; signatures checked for binary formats. Files are stored outside public static paths and downloaded through authenticated endpoints. Links permit HTTP(S) only.
+
+## One-time payments
+
+Administrators can create a single payment with `POST /api/v1/one-time-payments` using `title`, `description`, `amount`, `currency`, `due_date` and optional `group_ids`. The response contains `payment_type: "one_time"`. A one-time payment creates exactly one period, uses the same delivery, Telegram, email, demonstration-payment, receipt, attachment and audit flows as recurring payments, and is never regenerated by the worker, restart or budget calculation.
+
+One-time payments are included in `/api/v1/payment-occurrences`, `/api/v1/payments/summary` and `/api/v1/payments/budget`. Filter periods with `payment_type=one_time` or `payment_type=recurring`. They are excluded from `/api/v1/recurring-payments`. An administrator can cancel an unpaid one-time payment with `DELETE /api/v1/one-time-payments/{payment_id}`; this preserves the period and history and is separate from cancelling a payment confirmation.
 
 ## Authentication and configuration
 
