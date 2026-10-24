@@ -1,0 +1,12 @@
+aezainvoice.xxxmgxxx.com {
+    encode zstd gzip
+
+    @api path /api /api/* /health
+    handle @api {
+        reverse_proxy 127.0.0.1:8000
+    }
+
+    handle {
+        reverse_proxy 127.0.0.1:8080
+    }
+}
