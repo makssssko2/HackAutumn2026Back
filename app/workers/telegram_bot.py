@@ -1,6 +1,7 @@
 import asyncio
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from fastapi import HTTPException
@@ -38,13 +39,31 @@ async def connect(message: Message, bot: Bot):
 
 
 async def connect_chat(message: Message, bot: Bot, token: str):
-    if message.chat.type not in ('group', 'supergroup') or not message.from_user:
+    if message.chat.type not in ('group', 'supergroup'):
         await message.answer('Выполните команду в группе, где вы администратор.')
         return
-    member = await bot.get_chat_member(message.chat.id, message.from_user.id)
-    if member.status not in ('creator', 'administrator'):
-        await message.answer('Привязать чат может его администратор.')
-        return
+    if message.sender_chat:
+        # Telegram represents anonymous admins as the group itself. The fake
+        # from_user is not a real member and cannot be checked with getChatMember.
+        if message.sender_chat.id != message.chat.id or message.is_automatic_forward or message.forward_origin:
+            await message.answer('Отправьте команду от своего имени или от имени этой группы, где вы администратор.')
+            return
+        actor = f'telegram-chat:{message.chat.id}'
+    else:
+        if not message.from_user or message.from_user.is_bot:
+            await message.answer('Выполните команду от имени администратора группы.')
+            return
+        try:
+            # Unlike getChatMember for another user, the administrator list
+            # also works when this bot has not been promoted to administrator.
+            admins = await bot.get_chat_administrators(message.chat.id)
+        except TelegramAPIError:
+            await message.answer('Не удалось проверить права в Telegram. Убедитесь, что бот добавлен в группу, и повторите команду. Код не использован.')
+            return
+        if not any(admin.user.id == message.from_user.id and admin.status in ('creator', 'administrator') for admin in admins):
+            await message.answer('Привязать чат может его администратор. Если вы только что получили права, повторите команду.')
+            return
+        actor = f'telegram:{message.from_user.id}'
     with SessionLocal() as db:
         channel_id = db.scalar(delete(ChannelLink).where(
             ChannelLink.token == token,
@@ -60,7 +79,7 @@ async def connect_chat(message: Message, bot: Bot, token: str):
         channel.config = {**channel.config, 'chat_id': str(message.chat.id)}
         channel.active = True
         channel.connected_at = utcnow()
-        audit(db, f'telegram:{message.from_user.id}', 'channel.connected', channel.id, chat_id=str(message.chat.id))
+        audit(db, actor, 'channel.connected', channel.id, chat_id=str(message.chat.id))
         db.commit()
     await message.answer('Чат подключен. Здесь будут появляться счета и напоминания.')
 

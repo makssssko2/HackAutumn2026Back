@@ -209,11 +209,11 @@ def test_connect_code_is_single_use_and_requires_group_admin(db_factory, monkeyp
         db.add(channel); db.flush()
         db.add(ChannelLink(token='test-code', channel_id=channel.id, expires_at=utcnow() + timedelta(minutes=10)))
         db.commit(); cid = channel.id
-    bot = SimpleNamespace(get_chat_member=AsyncMock(return_value=SimpleNamespace(status='member')))
+    bot = SimpleNamespace(get_chat_administrators=AsyncMock(return_value=[]))
     asyncio.run(telegram.connect(message(text='/connect test-code'), bot))
     with db_factory() as db:
         assert db.get(ChannelLink, 'test-code') is not None
-    bot.get_chat_member.return_value = SimpleNamespace(status='administrator')
+    bot.get_chat_administrators.return_value = [SimpleNamespace(status='administrator', user=SimpleNamespace(id=11))]
     asyncio.run(telegram.connect(message(text='/connect test-code'), bot))
     with db_factory() as db:
         connected = db.get(Channel, cid)
@@ -231,17 +231,55 @@ def test_startgroup_links_existing_bot_without_web_account(db_factory, monkeypat
         db.add(channel); db.flush()
         db.add(ChannelLink(token='startgroup-code', channel_id=channel.id, expires_at=utcnow() + timedelta(minutes=10)))
         db.commit(); cid = channel.id
-    bot = SimpleNamespace(get_chat_member=AsyncMock(return_value=SimpleNamespace(status='member')))
+    bot = SimpleNamespace(get_chat_administrators=AsyncMock(return_value=[]))
     asyncio.run(telegram.start(message(text='/start@SampleBot startgroup-code'), bot))
     with db_factory() as db:
         assert db.get(ChannelLink, 'startgroup-code') is not None
-    bot.get_chat_member.return_value.status = 'administrator'
+    bot.get_chat_administrators.return_value = [SimpleNamespace(status='administrator', user=SimpleNamespace(id=11))]
     asyncio.run(telegram.start(message(text='/start@SampleBot startgroup-code'), bot))
     # Replay from another chat cannot replace the first binding.
     asyncio.run(telegram.start(message(-100999, text='/start@SampleBot startgroup-code'), bot))
     with db_factory() as db:
         assert db.get(Channel, cid).config['chat_id'] == '-100123'
         assert db.get(ChannelLink, 'startgroup-code') is None
+
+
+@pytest.mark.parametrize('sender', ['anonymous', 'foreign-channel', 'creator', 'member', 'api-error'])
+def test_connection_verifies_telegram_sender(db_factory, monkeypatch, sender):
+    import app.workers.telegram_bot as telegram
+    from aiogram.exceptions import TelegramBadRequest
+    from aiogram.methods import GetChatAdministrators
+    monkeypatch.setattr(telegram, 'SessionLocal', db_factory)
+    answer = AsyncMock()
+    monkeypatch.setattr(Message, 'answer', answer)
+    with db_factory() as db:
+        channel = Channel(name='Telegram permissions', kind='telegram', config={})
+        db.add(channel); db.flush()
+        db.add(ChannelLink(token='permission-code', channel_id=channel.id, expires_at=utcnow() + timedelta(minutes=10)))
+        db.commit(); cid = channel.id
+    incoming = message(text='/connect permission-code')
+    bot = SimpleNamespace(get_chat_administrators=AsyncMock(return_value=[
+        SimpleNamespace(status='creator', user=SimpleNamespace(id=11 if sender == 'creator' else 99))
+    ]))
+    if sender in ('anonymous', 'foreign-channel'):
+        payload = incoming.model_dump(by_alias=True)
+        payload['sender_chat'] = {'id': incoming.chat.id if sender == 'anonymous' else -100999, 'type': 'supergroup', 'title': 'Sender'}
+        payload['from'] = {'id': 1087968824, 'is_bot': True, 'first_name': 'GroupAnonymousBot'}
+        incoming = Message.model_validate(payload)
+    if sender == 'api-error':
+        bot.get_chat_administrators.side_effect = TelegramBadRequest(method=GetChatAdministrators(chat_id=incoming.chat.id), message='not enough rights')
+    asyncio.run(telegram.connect(incoming, bot))
+    allowed = sender in ('anonymous', 'creator')
+    with db_factory() as db:
+        assert (db.get(ChannelLink, 'permission-code') is None) == allowed
+        assert bool(db.get(Channel, cid).config.get('chat_id')) == allowed
+        if sender == 'anonymous':
+            log = db.scalar(select(AuditLog).where(AuditLog.action == 'channel.connected'))
+            assert log.actor == 'telegram-chat:-100123'
+    if sender in ('anonymous', 'foreign-channel'):
+        bot.get_chat_administrators.assert_not_awaited()
+    if sender == 'api-error':
+        assert 'Код не использован' in answer.call_args.args[0]
 
 
 def test_startgroup_rejects_private_chat_and_expired_code(db_factory, monkeypatch):
@@ -253,10 +291,10 @@ def test_startgroup_rejects_private_chat_and_expired_code(db_factory, monkeypatc
         db.add(channel); db.flush()
         db.add(ChannelLink(token='expired-code', channel_id=channel.id, expires_at=utcnow() - timedelta(minutes=1)))
         db.commit(); cid = channel.id
-    bot = SimpleNamespace(get_chat_member=AsyncMock(return_value=SimpleNamespace(status='administrator')))
+    bot = SimpleNamespace(get_chat_administrators=AsyncMock(return_value=[SimpleNamespace(status='administrator', user=SimpleNamespace(id=11))]))
     private = Message.model_validate({'message_id': 7, 'date': utcnow(), 'chat': {'id': 11, 'type': 'private', 'first_name': 'Tester'}, 'from': {'id': 11, 'is_bot': False, 'first_name': 'Tester'}, 'text': '/start expired-code'})
     asyncio.run(telegram.start(private, bot))
-    assert bot.get_chat_member.await_count == 0
+    assert bot.get_chat_administrators.await_count == 0
     asyncio.run(telegram.start(message(text='/start@SampleBot expired-code'), bot))
     with db_factory() as db:
         assert db.get(Channel, cid).config == {}
@@ -335,8 +373,8 @@ def test_connect_code_can_only_bind_one_chat_concurrently(db_factory, monkeypatc
     barrier = Barrier(2)
     async def member(*args):
         barrier.wait(timeout=10)
-        return SimpleNamespace(status='administrator')
-    bot = SimpleNamespace(get_chat_member=member)
+        return [SimpleNamespace(status='administrator', user=SimpleNamespace(id=11))]
+    bot = SimpleNamespace(get_chat_administrators=member)
     def bind(chat_id):
         asyncio.run(telegram.connect(message(chat_id, text='/connect race-code'), bot))
     with ThreadPoolExecutor(max_workers=2) as pool:
