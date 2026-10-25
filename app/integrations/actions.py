@@ -7,7 +7,7 @@ from sqlalchemy import delete
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.domain.services import confirm_occurrence
+from app.modules.payments.service import confirm_occurrence
 from app.integrations.base import Callback
 from app.models import BotAction, Channel, Delivery, IntegrationConnection, Occurrence, utcnow
 

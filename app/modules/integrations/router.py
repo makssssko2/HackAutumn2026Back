@@ -8,13 +8,12 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.db import get_db
 from app.core.security import admin_user
-from app.domain.services import audit
+from app.modules.payments.service import audit
 from app.integrations.base import IntegrationError, get_adapter
 from app.integrations.security import decrypt_credentials, encrypt_credentials
 from app.models import IntegrationConnection, IntegrationInbox, User, utcnow
-from app.repositories.base import get_or_404
-from app.repositories.integrations import list_connections
-from app.repositories.pagination import PageRequest, collection_page
+from app.shared.repository import get_or_404
+from app.shared.pagination import PageRequest, collection_page
 from app.schemas import IntegrationConnectionIn, IntegrationConnectionPatch
 
 router = APIRouter(prefix='/api/v1/integrations', tags=['Integrations'])
