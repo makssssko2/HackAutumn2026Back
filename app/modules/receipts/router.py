@@ -6,9 +6,9 @@ from app.core.db import get_db
 from app.core.security import current_user
 from app.models import Receipt, User
 from app.presentation.receipts import receipt_html
-from app.repositories.base import get_or_404
-from app.repositories.occurrences import get_occurrence_payment
-from app.repositories.receipts import get_receipt_occurrence
+from app.shared.repository import get_or_404
+from app.modules.invoices.repository import get_occurrence_payment
+from app.modules.receipts.repository import get_receipt_occurrence
 
 router = APIRouter(prefix='/api/v1/receipts', tags=['Receipts'])
 
