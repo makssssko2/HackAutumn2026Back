@@ -91,7 +91,7 @@ class IncomingInvoice(Base):
         CheckConstraint("review_status IN ('draft', 'submitted', 'approved', 'rejected', 'cancelled')", name='ck_incoming_invoices_review_status'),
         CheckConstraint("payment_status IN ('unpaid', 'paid')", name='ck_incoming_invoices_payment_status'),
         CheckConstraint('revision > 0', name='ck_incoming_invoices_revision_positive'),
-        CheckConstraint("payment_status = 'unpaid' OR review_status = 'approved'", name='ck_incoming_invoices_paid_requires_approval'),
+        CheckConstraint("payment_status = 'unpaid' OR review_status IN ('submitted', 'approved')", name='ck_incoming_invoices_paid_requires_submission'),
         ForeignKeyConstraint(['partner_id', 'buyer_id'], ['partner_buyer_access.partner_id', 'partner_buyer_access.buyer_id'], name='fk_incoming_invoices_partner_buyer_access'),
         ForeignKeyConstraint(['partner_id', 'bank_account_id'], ['partner_bank_accounts.partner_id', 'partner_bank_accounts.id'], name='fk_incoming_invoices_partner_bank_account'),
         Index('ix_incoming_invoices_buyer_review_created_id', 'buyer_id', 'review_status', 'payment_status', 'due_date', 'id'),

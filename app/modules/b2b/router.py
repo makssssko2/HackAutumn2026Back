@@ -9,7 +9,10 @@ from app.core.config import settings
 from app.core.db import get_db
 from app.core.partner_security import PartnerPrincipal, require_partner_scope
 from app.modules.b2b.service import (record_history, require_revision, submit_invoice,
-                                          transition_invoice, validate_create_references)
+                                    transition_invoice, validate_create_references,
+                                    snapshot_supplier, snapshot_buyer, snapshot_account,
+                                    enqueue_invoice_event)
+from app.models import utcnow
 from app.modules.b2b.models import (BusinessPartner, IncomingInvoice, IncomingInvoiceDocument,
                             PartnerBankAccount, PartnerBuyerAccess, BuyerOrganization)
 from app.modules.b2b.idempotency import fingerprint, replay_or_conflict, save_response
@@ -20,7 +23,7 @@ router = APIRouter(prefix='/api/b2b/v1', tags=['B2B Incoming Invoices'])
 
 
 def invoice_out(invoice: IncomingInvoice) -> dict:
-    return {'id': invoice.id, 'external_id': invoice.external_id, 'buyer_id': invoice.buyer_id, 'bank_account_id': invoice.bank_account_id, 'number': invoice.number, 'issued_at': invoice.issued_at, 'due_date': invoice.due_date, 'title': invoice.title, 'description': invoice.description, 'amount': str(invoice.amount), 'currency': invoice.currency, 'review_status': invoice.review_status, 'payment_status': invoice.payment_status, 'revision': invoice.revision, 'decision_reason': invoice.decision_reason, 'created_at': invoice.created_at, 'updated_at': invoice.updated_at}
+    return {'id': invoice.id, 'partner_id': invoice.partner_id, 'environment': invoice.environment, 'external_id': invoice.external_id, 'buyer_id': invoice.buyer_id, 'bank_account_id': invoice.bank_account_id, 'number': invoice.number, 'issued_at': invoice.issued_at, 'due_date': invoice.due_date, 'title': invoice.title, 'description': invoice.description, 'amount': str(invoice.amount), 'currency': invoice.currency, 'review_status': invoice.review_status, 'payment_status': invoice.payment_status, 'revision': invoice.revision, 'decision_reason': invoice.decision_reason, 'created_at': invoice.created_at, 'updated_at': invoice.updated_at}
 
 
 def document_out(document: IncomingInvoiceDocument) -> dict:
@@ -47,21 +50,27 @@ def me(principal: PartnerPrincipal = Depends(require_partner_scope('invoices:rea
     return {'partner': {'id': partner.id, 'name': partner.name, 'inn': partner.inn, 'kpp': partner.kpp}, 'environment': principal.environment, 'scopes': sorted(principal.scopes), 'buyers': [{'id': row.id, 'name': row.name, 'inn': row.inn, 'kpp': row.kpp} for row in buyers], 'bank_accounts': [{'id': row.id, 'account_number': row.account_number, 'bank_name': row.bank_name, 'bank_bic': row.bank_bic, 'correspondent_account': row.correspondent_account} for row in accounts]}
 
 
-@router.post('/invoices', status_code=201)
+@router.post('/invoices', status_code=201, summary='Receive an invoice from JSON without PDF or administrator approval')
 def create_invoice(data: InvoiceIn, idempotency_key: str | None = Header(default=None, alias='Idempotency-Key'), principal: PartnerPrincipal = Depends(require_partner_scope('invoices:write')), db: Session = Depends(get_db)):
     key = require_idempotency(idempotency_key)
     body = data.model_dump(mode='json')
     request_fingerprint, replay = cached_response(db, principal, key, 'POST', '/invoices', body)
     if replay:
         return replay
-    validate_create_references(db, principal.partner_id, data.buyer_id, data.bank_account_id)
+    buyer, account = validate_create_references(db, principal.partner_id, data.buyer_id, data.bank_account_id)
     duplicate = db.scalar(select(IncomingInvoice).where(IncomingInvoice.partner_id == principal.partner_id, IncomingInvoice.environment == principal.environment, IncomingInvoice.buyer_id == data.buyer_id, IncomingInvoice.external_id == data.external_id))
     if duplicate:
         raise HTTPException(409, 'duplicate_external_id')
-    invoice = IncomingInvoice(partner_id=principal.partner_id, environment=principal.environment, **data.model_dump())
+    partner = db.get(BusinessPartner, principal.partner_id)
+    invoice = IncomingInvoice(partner_id=principal.partner_id, environment=principal.environment,
+                              review_status='submitted', submitted_at=utcnow(),
+                              supplier_snapshot=snapshot_supplier(partner),
+                              buyer_snapshot=snapshot_buyer(buyer),
+                              bank_account_snapshot=snapshot_account(account), **data.model_dump())
     db.add(invoice)
     db.flush()
     record_history(db, invoice, 'created', 'partner', principal.partner_id, None)
+    enqueue_invoice_event(db, invoice, 'incoming_invoice.submitted')
     response = invoice_out(invoice)
     save_response(db, principal.partner_id, principal.environment, key, request_fingerprint, 201, response, settings.b2b_idempotency_ttl_days)
     db.commit()
@@ -123,7 +132,7 @@ async def upload_document(invoice_id: str, expected_revision: int = Form(gt=0), 
         return replay
     invoice = partner_invoice_or_404(db, invoice_id, principal.partner_id, principal.environment, for_update=True)
     require_revision(invoice, expected_revision)
-    if invoice.review_status != 'draft':
+    if invoice.review_status not in {'draft', 'submitted', 'approved'} or invoice.payment_status != 'unpaid':
         raise HTTPException(409, 'invalid_transition')
     count, total = db.execute(select(func.count(IncomingInvoiceDocument.id), func.coalesce(func.sum(IncomingInvoiceDocument.size_bytes), 0)).where(IncomingInvoiceDocument.invoice_id == invoice.id)).one()
     if count >= settings.b2b_document_max_files:
@@ -172,7 +181,7 @@ def delete_document(invoice_id: str, document_id: str, data: RevisionIn, idempot
     return response
 
 
-@router.post('/invoices/{invoice_id}/submit')
+@router.post('/invoices/{invoice_id}/submit', deprecated=True, summary='Compatibility endpoint; new invoices are submitted on creation')
 def submit(invoice_id: str, data: RevisionIn, idempotency_key: str | None = Header(default=None, alias='Idempotency-Key'), principal: PartnerPrincipal = Depends(require_partner_scope('invoices:write')), db: Session = Depends(get_db)):
     return _partner_transition(db, principal, invoice_id, data, idempotency_key, 'submit')
 

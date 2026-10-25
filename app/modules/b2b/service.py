@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.models import utcnow
 from app.modules.b2b.models import (BusinessPartner, BuyerOrganization, IncomingInvoice,
-                             IncomingInvoiceDocument, IncomingInvoiceHistory,
+                             IncomingInvoiceHistory,
                             IncomingInvoiceOutbox, IncomingInvoicePayment,
                             PartnerBankAccount)
 
@@ -81,15 +81,15 @@ def snapshot_account(account: PartnerBankAccount) -> dict:
 
 def submit_invoice(db: Session, invoice: IncomingInvoice, expected_revision: int, actor_id: str) -> None:
     require_revision(invoice, expected_revision)
+    # Compatibility for existing integrations. New JSON invoices are already
+    # submitted by POST /invoices; repeating submit must not enqueue twice.
+    if invoice.review_status in {'submitted', 'approved'}:
+        return
     if invoice.review_status != 'draft':
         raise HTTPException(409, 'invalid_transition')
-    document = db.scalar(select(IncomingInvoiceDocument.id).where(IncomingInvoiceDocument.invoice_id == invoice.id, IncomingInvoiceDocument.document_type == 'invoice', IncomingInvoiceDocument.content_type == 'application/pdf', IncomingInvoiceDocument.scan_status == 'clean'))
-    if document is None:
-        raise HTTPException(422, 'A clean PDF invoice document is required')
     partner = db.get(BusinessPartner, invoice.partner_id)
-    buyer = db.get(BuyerOrganization, invoice.buyer_id)
-    account = db.get(PartnerBankAccount, invoice.bank_account_id)
-    if partner is None or buyer is None or account is None:
+    buyer, account = validate_create_references(db, invoice.partner_id, invoice.buyer_id, invoice.bank_account_id)
+    if partner is None or partner.status != 'active':
         raise HTTPException(409, 'Invoice references are unavailable')
     previous = invoice_state(invoice)
     invoice.supplier_snapshot = snapshot_supplier(partner)
@@ -104,29 +104,24 @@ def submit_invoice(db: Session, invoice: IncomingInvoice, expected_revision: int
 
 def transition_invoice(db: Session, invoice: IncomingInvoice, expected_revision: int, action: str, actor_type: str, actor_id: str, reason: str | None = None) -> None:
     require_revision(invoice, expected_revision)
-    allowed = {
-        ('partner', 'cancel'): {'draft', 'submitted'},
-        ('admin', 'approve'): {'submitted'},
-        ('admin', 'reject'): {'submitted'},
-        ('admin', 'cancel'): {'approved'},
-    }
-    if invoice.review_status not in allowed[(actor_type, action)] or (action == 'cancel' and invoice.payment_status == 'paid'):
+    # Existing approved invoices remain payable and cancellable by their
+    # supplier. Administrators only record/reverse payments, never moderate.
+    permitted = {'draft', 'submitted', 'approved'} if (actor_type, action) == ('partner', 'cancel') else set()
+    if invoice.review_status not in permitted or invoice.payment_status == 'paid':
         raise HTTPException(409, 'invalid_transition')
-    if action in {'reject', 'cancel'} and not reason:
+    if not reason or not reason.strip():
         raise HTTPException(422, 'reason is required')
     previous = invoice_state(invoice)
-    invoice.review_status = {'approve': 'approved', 'reject': 'rejected', 'cancel': 'cancelled'}[action]
-    invoice.decision_reason = reason if action in {'reject', 'cancel'} else None
-    invoice.decided_at = utcnow() if actor_type == 'admin' else invoice.decided_at
+    invoice.review_status = 'cancelled'
+    invoice.decision_reason = reason
     invoice.revision += 1
-    record_history(db, invoice, action + 'd', actor_type, actor_id, previous, reason)
-    event_types = {'approve': 'approved', 'reject': 'rejected', 'cancel': 'cancelled'}
-    enqueue_invoice_event(db, invoice, 'incoming_invoice.' + event_types[action])
+    record_history(db, invoice, 'cancelled', actor_type, actor_id, previous, reason)
+    enqueue_invoice_event(db, invoice, 'incoming_invoice.cancelled')
 
 
 def record_payment(db: Session, invoice: IncomingInvoice, expected_revision: int, amount: Decimal, paid_at, reference: str, user_id: str) -> None:
     require_revision(invoice, expected_revision)
-    if invoice.review_status != 'approved' or invoice.payment_status != 'unpaid' or amount != invoice.amount:
+    if invoice.review_status not in {'submitted', 'approved'} or invoice.payment_status != 'unpaid' or amount != invoice.amount:
         raise HTTPException(409, 'invalid_payment')
     previous = invoice_state(invoice)
     db.add(IncomingInvoicePayment(invoice_id=invoice.id, amount=amount, currency='RUB', paid_at=paid_at, reference=reference, recorded_by_user_id=user_id))

@@ -5,14 +5,14 @@ from sqlalchemy import select
 
 from app.modules.b2b.service import enqueue_invoice_event, submit_invoice
 from app.modules.b2b.models import (BusinessPartner, BuyerOrganization, IncomingInvoice,
-                            IncomingInvoiceDocument, IncomingInvoiceNotification,
+                            IncomingInvoiceNotification,
                             IncomingInvoiceNotificationRecipient,
                             IncomingInvoiceOutbox, PartnerBankAccount,
                             PartnerBuyerAccess)
 
 
 def test_submit_creates_one_sanitized_outbox_event_atomically(db_factory):
-    # Given: a draft invoice with the clean PDF required for submission.
+    # Given: a legacy draft; documents are optional for JSON submission.
     with db_factory() as db:
         partner = BusinessPartner(name='Supplier', inn='1234567890')
         buyer = BuyerOrganization(name='Buyer', inn='0987654321')
@@ -24,7 +24,6 @@ def test_submit_creates_one_sanitized_outbox_event_atomically(db_factory):
         invoice = IncomingInvoice(partner_id=partner.id, buyer_id=buyer.id, bank_account_id=account.id, environment='test', external_id='external-1', number='INV-1', issued_at=date.today(), due_date=date.today(), title='Services', amount=Decimal('10.00'))
         db.add(invoice)
         db.flush()
-        db.add(IncomingInvoiceDocument(invoice_id=invoice.id, document_type='invoice', original_name='invoice.pdf', storage_name='invoice.pdf', content_type='application/pdf', size_bytes=10, sha256='a' * 64, scan_status='clean'))
 
         # When: the lifecycle transition and a repeated durable event request run in one transaction.
         submit_invoice(db, invoice, 1, partner.id)

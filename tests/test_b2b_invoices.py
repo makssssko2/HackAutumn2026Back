@@ -10,7 +10,7 @@ from app.modules.b2b.models import (BusinessPartner, BuyerOrganization, PartnerA
                             PartnerBankAccount, PartnerBuyerAccess)
 
 
-def test_partner_creates_uploads_and_submits_own_invoice(db_factory, tmp_path, monkeypatch):
+def test_legacy_partner_can_attach_optional_document_and_repeat_submit(db_factory, tmp_path, monkeypatch):
     # Given: a B2B-enabled partner with access to one buyer and bank account.
     monkeypatch.setattr(settings, 'b2b_enabled', True)
     monkeypatch.setattr(settings, 'b2b_api_key_pepper', 'test-pepper')
@@ -42,15 +42,17 @@ def test_partner_creates_uploads_and_submits_own_invoice(db_factory, tmp_path, m
     headers = {'Authorization': f'Bearer {raw_key}', 'Idempotency-Key': 'create-1'}
     payload = {'external_id': 'supplier-1', 'buyer_id': buyer_id, 'bank_account_id': account_id, 'number': '1', 'issued_at': str(date.today()), 'due_date': str(date.today()), 'title': 'Services', 'amount': '10.00', 'currency': 'RUB'}
 
-    # When: the partner creates a draft, uploads its signed PDF, then submits it.
+    # When: an existing integration creates a JSON invoice, attaches an optional
+    # PDF, then calls the compatibility submit endpoint.
     created = client.post('/api/b2b/v1/invoices', json=payload, headers=headers)
     assert created.status_code == 201
     invoice = created.json()
+    assert invoice['review_status'] == 'submitted'
     uploaded = client.post(f"/api/b2b/v1/invoices/{invoice['id']}/documents", data={'expected_revision': '1', 'document_type': 'invoice'}, files={'file': ('invoice.pdf', b'%PDF-1.4\ncontent', 'application/pdf')}, headers={'Authorization': f'Bearer {raw_key}', 'Idempotency-Key': 'upload-1'})
     assert uploaded.status_code == 201
     submitted = client.post(f"/api/b2b/v1/invoices/{invoice['id']}/submit", json={'expected_revision': 2}, headers={'Authorization': f'Bearer {raw_key}', 'Idempotency-Key': 'submit-1'})
 
-    # Then: immutable submission state is visible only through the partner key.
+    # Then: the invoice was already submitted by creation, and remains accessible.
     assert submitted.status_code == 200
     assert submitted.json()['review_status'] == 'submitted'
     assert client.get(f"/api/b2b/v1/invoices/{invoice['id']}/documents/{uploaded.json()['id']}/download", headers={'Authorization': f'Bearer {raw_key}'}).content.startswith(b'%PDF-')
