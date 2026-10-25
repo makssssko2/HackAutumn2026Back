@@ -6,13 +6,13 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.security import admin_user
-from app.domain.formatters import public
-from app.domain.services import audit
-from app.domain.validators import check_channel
+from app.shared.formatters import public
+from app.modules.payments.service import audit
+from app.shared.validators import check_channel
 from app.models import Channel, ChannelLink, Delivery, IntegrationConnection, User, uid, utcnow
-from app.repositories.base import get_or_404
-from app.repositories.channels import latest_active_occurrence, list_channels, revoke_channel_payment_links
-from app.repositories.pagination import PageRequest, collection_page
+from app.shared.repository import get_or_404
+from app.modules.channels.repository import latest_active_occurrence, revoke_channel_payment_links
+from app.shared.pagination import PageRequest, collection_page
 from app.schemas import ChannelIn
 
 router = APIRouter(prefix='/api/v1/channels', tags=['Notifications'])
