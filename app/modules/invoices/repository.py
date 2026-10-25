@@ -1,8 +1,12 @@
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession as Session
 
 from app.core.config import today
-from app.models import AuditLog, Attachment, Occurrence, Receipt, RecurringPayment
+from app.modules.audit.models import AuditLog
+from app.modules.attachments.models import Attachment
+from app.modules.invoices.models import Occurrence
+from app.modules.receipts.models import Receipt
+from app.modules.payments.models import RecurringPayment
 
 
 def occurrences_query(
@@ -49,36 +53,36 @@ def occurrences_query(
     return query.order_by(ordered.nulls_last(), Occurrence.title, Occurrence.id)
 
 
-def list_occurrences(db: Session, limit: int = 1000, **filters) -> list[Occurrence]:
-    return list(db.scalars(occurrences_query(**filters).limit(limit)))
+async def list_occurrences(db: Session, limit: int = 1000, **filters) -> list[Occurrence]:
+    return list((await db.scalars(occurrences_query(**filters).limit(limit))))
 
 
-def get_occurrence(db: Session, oid: str) -> Occurrence | None:
-    return db.get(Occurrence, oid)
+async def get_occurrence(db: Session, oid: str) -> Occurrence | None:
+    return (await db.get(Occurrence, oid))
 
 
-def get_occurrence_payment(db: Session, occurrence: Occurrence) -> RecurringPayment | None:
-    return db.get(RecurringPayment, occurrence.recurring_id)
+async def get_occurrence_payment(db: Session, occurrence: Occurrence) -> RecurringPayment | None:
+    return (await db.get(RecurringPayment, occurrence.recurring_id))
 
 
-def get_occurrence_payment_data(db: Session, occurrence_ids: set[str]) -> dict[str, tuple[str, str]]:
+async def get_occurrence_payment_data(db: Session, occurrence_ids: set[str]) -> dict[str, tuple[str, str]]:
     if not occurrence_ids:
         return {}
-    rows = db.execute(
+    rows = (await db.execute(
         select(Occurrence.id, RecurringPayment.payment_type, RecurringPayment.description)
         .join(RecurringPayment, RecurringPayment.id == Occurrence.recurring_id)
         .where(Occurrence.id.in_(occurrence_ids))
-    )
+    ))
     return {occurrence_id: (payment_type, description) for occurrence_id, payment_type, description in rows}
 
 
-def list_occurrence_receipts(db: Session, occurrence_id: str) -> list[Receipt]:
-    return list(db.scalars(select(Receipt).where(Receipt.occurrence_id == occurrence_id).order_by(Receipt.created_at.desc())))
+async def list_occurrence_receipts(db: Session, occurrence_id: str) -> list[Receipt]:
+    return list((await db.scalars(select(Receipt).where(Receipt.occurrence_id == occurrence_id).order_by(Receipt.created_at.desc()))))
 
 
-def list_occurrence_attachments(db: Session, occurrence_id: str) -> list[Attachment]:
-    return list(db.scalars(select(Attachment).where(Attachment.occurrence_id == occurrence_id).order_by(Attachment.created_at.desc())))
+async def list_occurrence_attachments(db: Session, occurrence_id: str) -> list[Attachment]:
+    return list((await db.scalars(select(Attachment).where(Attachment.occurrence_id == occurrence_id).order_by(Attachment.created_at.desc()))))
 
 
-def list_occurrence_history(db: Session, occurrence_id: str) -> list[AuditLog]:
-    return list(db.scalars(select(AuditLog).where(AuditLog.object_id == occurrence_id).order_by(AuditLog.created_at.desc())))
+async def list_occurrence_history(db: Session, occurrence_id: str) -> list[AuditLog]:
+    return list((await db.scalars(select(AuditLog).where(AuditLog.object_id == occurrence_id).order_by(AuditLog.created_at.desc()))))

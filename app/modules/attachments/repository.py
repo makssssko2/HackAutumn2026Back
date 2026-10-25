@@ -1,7 +1,7 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession as Session
 
-from app.models import Attachment
+from app.modules.attachments.models import Attachment
 
 
-def get_attachment(db: Session, aid: str) -> Attachment | None:
-    return db.get(Attachment, aid)
+async def get_attachment(db: Session, aid: str) -> Attachment | None:
+    return (await db.get(Attachment, aid))

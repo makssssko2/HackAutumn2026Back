@@ -1,9 +1,9 @@
+from app.integrations.http import create_http_client
 import base64
 import json
-import httpx
 
 from app.integrations.base import Callback, IntegrationError, SentMessage, credentials, response_json
-from app.models import IntegrationConnection
+from app.modules.integrations.models import IntegrationConnection
 
 MAX_FILE_BYTES = 100 * 1024 * 1024
 
@@ -24,29 +24,29 @@ class Bitrix24Adapter:
             raise IntegrationError('credentials_invalid', 'Bitrix24 bot еще не настроен')
         return {'botId': connection.external_bot_id, 'botToken': bot_token}
 
-    def _request(self, connection: IntegrationConnection, method: str, payload: dict | None = None):
-        with httpx.Client(timeout=30, follow_redirects=False) as client:
-            response = client.post(f'{self._webhook_url(connection)}{method}.json', json=payload or {})
+    async def _request(self, connection: IntegrationConnection, method: str, payload: dict | None = None):
+        async with await create_http_client(timeout=30, follow_redirects=False) as client:
+            response = (await client.post(f'{self._webhook_url(connection)}{method}.json', json=payload or {}))
         body = response_json(response)
         if body.get('error'):
             raise IntegrationError('provider_rejected', 'Bitrix24 отклонил запрос')
         return body.get('result', body)
 
-    def _call(self, connection: IntegrationConnection, method: str, payload: dict | None = None) -> dict:
-        result = self._request(connection, method, payload)
+    async def _call(self, connection: IntegrationConnection, method: str, payload: dict | None = None) -> dict:
+        result = (await self._request(connection, method, payload))
         if not isinstance(result, dict):
             raise IntegrationError('provider_invalid_response', 'Bitrix24 вернул неверный результат')
         return result
 
-    def validate(self, connection: IntegrationConnection) -> dict:
-        self._request(connection, 'imbot.v2.Revision.get')
+    async def validate(self, connection: IntegrationConnection) -> dict:
+        (await self._request(connection, 'imbot.v2.Revision.get'))
         return {
             'external_bot_id': connection.external_bot_id,
             'capabilities': {'native_actions': True, 'message_edit': True, 'file_upload': True, 'polling': True},
         }
 
-    def register_bot(self, connection: IntegrationConnection, code: str, bot_token: str) -> str:
-        result = self._call(connection, 'imbot.v2.Bot.register', {
+    async def register_bot(self, connection: IntegrationConnection, code: str, bot_token: str) -> str:
+        result = (await self._call(connection, 'imbot.v2.Bot.register', {
             'fields': {
                 'code': code,
                 'botToken': bot_token,
@@ -54,16 +54,16 @@ class Bitrix24Adapter:
                 'type': 'bot',
                 'eventMode': 'fetch',
             },
-        })
+        }))
         bot = result.get('bot') if isinstance(result.get('bot'), dict) else {}
         bot_id = result.get('botId') or result.get('id') or bot.get('id')
         if not isinstance(bot_id, (str, int)):
             raise IntegrationError('provider_invalid_response', 'Bitrix24 не вернул ID бота')
         return str(bot_id)
 
-    def register_command(self, connection: IntegrationConnection) -> None:
+    async def register_command(self, connection: IntegrationConnection) -> None:
         auth = self._auth(connection)
-        self._call(connection, 'imbot.v2.Command.register', {
+        (await self._call(connection, 'imbot.v2.Command.register', {
             **auth,
             'fields': {
                 'command': 'confirm',
@@ -71,59 +71,59 @@ class Bitrix24Adapter:
                 'hidden': True,
                 'common': False,
             },
-        })
+        }))
 
-    def update_bot(self, connection: IntegrationConnection) -> None:
-        self._call(connection, 'imbot.v2.Bot.update', {
+    async def update_bot(self, connection: IntegrationConnection) -> None:
+        (await self._call(connection, 'imbot.v2.Bot.update', {
             **self._auth(connection),
             'fields': {
                 'properties': {'name': connection.name},
                 'type': 'bot',
                 'eventMode': 'fetch',
             },
-        })
+        }))
 
-    def poll(self, connection: IntegrationConnection, offset: str | None) -> dict:
+    async def poll(self, connection: IntegrationConnection, offset: str | None) -> dict:
         payload: dict = {**self._auth(connection), 'limit': 1000}
         if offset:
             payload['offset'] = offset
-        return self._call(connection, 'imbot.v2.Event.get', payload)
+        return (await self._call(connection, 'imbot.v2.Event.get', payload))
 
-    def send_invoice(self, connection: IntegrationConnection, chat_id: str, text: str, actions: list[dict]) -> SentMessage:
-        result = self._call(connection, 'imbot.v2.Chat.Message.send', {
+    async def send_invoice(self, connection: IntegrationConnection, chat_id: str, text: str, actions: list[dict]) -> SentMessage:
+        result = (await self._call(connection, 'imbot.v2.Chat.Message.send', {
             **self._auth(connection),
             'dialogId': chat_id,
             'message': text[:20000],
             'keyboard': self._keyboard(connection, actions),
-        })
+        }))
         message_id = result.get('messageId') or result.get('id')
         if not isinstance(message_id, (str, int)):
             raise IntegrationError('provider_invalid_response', 'Bitrix24 не вернул ID сообщения')
         return SentMessage(str(message_id))
 
-    def update_invoice(self, connection: IntegrationConnection, chat_id: str, message_id: str, text: str, actions: list[dict]) -> SentMessage:
-        self._call(connection, 'imbot.v2.Chat.Message.update', {
+    async def update_invoice(self, connection: IntegrationConnection, chat_id: str, message_id: str, text: str, actions: list[dict]) -> SentMessage:
+        (await self._call(connection, 'imbot.v2.Chat.Message.update', {
             **self._auth(connection),
             'dialogId': chat_id,
             'messageId': message_id,
             'message': text[:20000],
             'keyboard': self._keyboard(connection, actions),
-        })
+        }))
         return SentMessage(message_id)
 
-    def send_file(self, connection: IntegrationConnection, chat_id: str, filename: str, content: bytes, caption: str) -> str | None:
+    async def send_file(self, connection: IntegrationConnection, chat_id: str, filename: str, content: bytes, caption: str) -> str | None:
         if len(content) > MAX_FILE_BYTES:
             raise IntegrationError('file_too_large', 'Файл для Bitrix24 больше 100 MB')
-        result = self._call(connection, 'imbot.v2.File.upload', {
+        result = (await self._call(connection, 'imbot.v2.File.upload', {
             **self._auth(connection),
             'dialogId': chat_id,
             'fields': {'name': filename, 'content': base64.b64encode(content).decode('ascii')},
             'message': caption,
-        })
+        }))
         file_id = result.get('fileId') or result.get('id')
         return str(file_id) if isinstance(file_id, (str, int)) else None
 
-    def acknowledge_command(self, connection: IntegrationConnection, event: dict, text: str) -> None:
+    async def acknowledge_command(self, connection: IntegrationConnection, event: dict, text: str) -> None:
         command = event.get('command')
         message = event.get('message')
         chat = event.get('chat')
@@ -133,9 +133,9 @@ class Bitrix24Adapter:
         message_id = message.get('id') or event.get('messageId')
         dialog_id = chat.get('dialogId') or event.get('dialogId')
         if all(isinstance(value, (str, int)) for value in (command_id, message_id, dialog_id)):
-            self._call(connection, 'imbot.v2.Command.answer', {
+            (await self._call(connection, 'imbot.v2.Command.answer', {
                 **self._auth(connection), 'commandId': command_id, 'messageId': message_id, 'dialogId': dialog_id, 'message': text,
-            })
+            }))
 
     def parse_callback(self, connection: IntegrationConnection, event: dict) -> Callback:
         command = event.get('command')

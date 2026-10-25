@@ -24,6 +24,7 @@ from app.modules.auth import system_router as system
 from app.modules.notifications.service import telegram_call  # re-exported for tests
 from app.core.bootstrap import bootstrap
 from app.core.config import settings
+from app.core.db import engine
 from app.core.logging import protect_public_invoice_logs
 from app.modules.invoices.public_router import router as public_invoice_router
 from app.modules.invoices.payment_access import router as payment_access_router
@@ -37,8 +38,11 @@ protect_public_invoice_logs()
 @asynccontextmanager
 async def lifespan(app):
     # Schema migrations are an explicit startup step; never auto-create production tables.
-    bootstrap()
-    yield
+    try:
+        await bootstrap()
+        yield
+    finally:
+        await engine.dispose()
 
 
 app = FastAPI(

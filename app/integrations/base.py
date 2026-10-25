@@ -4,7 +4,7 @@ from typing import Protocol
 
 import httpx
 
-from app.models import IntegrationConnection
+from app.modules.integrations.models import IntegrationConnection
 from app.integrations.security import decrypt_credentials
 
 
@@ -31,13 +31,13 @@ class Callback:
 class IntegrationAdapter(Protocol):
     provider: str
 
-    def validate(self, connection: IntegrationConnection) -> dict: ...
+    async def validate(self, connection: IntegrationConnection) -> dict: ...
 
-    def send_invoice(self, connection: IntegrationConnection, chat_id: str, text: str, actions: list[dict]) -> SentMessage: ...
+    async def send_invoice(self, connection: IntegrationConnection, chat_id: str, text: str, actions: list[dict]) -> SentMessage: ...
 
-    def update_invoice(self, connection: IntegrationConnection, chat_id: str, message_id: str, text: str, actions: list[dict]) -> SentMessage: ...
+    async def update_invoice(self, connection: IntegrationConnection, chat_id: str, message_id: str, text: str, actions: list[dict]) -> SentMessage: ...
 
-    def send_file(self, connection: IntegrationConnection, chat_id: str, filename: str, content: bytes, caption: str) -> str | None: ...
+    async def send_file(self, connection: IntegrationConnection, chat_id: str, filename: str, content: bytes, caption: str) -> str | None: ...
 
 
 def credentials(connection: IntegrationConnection) -> dict[str, str]:

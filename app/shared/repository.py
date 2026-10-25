@@ -1,9 +1,9 @@
 from fastapi import HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession as Session
 
 
-def get_or_404(db: Session, cls, oid):
-    row = db.get(cls, oid)
+async def get_or_404(db: Session, cls, oid):
+    row = (await db.get(cls, oid))
     if not row:
         raise HTTPException(404, 'Объект не найден')
     return row

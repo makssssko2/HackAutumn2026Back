@@ -13,6 +13,8 @@ if context.is_offline_mode():
     with context.begin_transaction():
         context.run_migrations()
 else:
+    # The migration CLI precedes application bootstrap on a fresh local install.
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
     engine = engine_from_config(config.get_section(config.config_ini_section), prefix='sqlalchemy.', poolclass=pool.NullPool)
     with engine.connect() as connection:
         context.configure(connection=connection, target_metadata=Base.metadata)

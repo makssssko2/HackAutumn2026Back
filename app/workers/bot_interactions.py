@@ -10,7 +10,10 @@ from sqlalchemy import delete, select
 
 from app.core.config import today
 from app.modules.payments.service import confirm_occurrence
-from app.models import BotAction, Receipt, RecurringPayment, utcnow
+from app.modules.integrations.models import BotAction
+from app.modules.receipts.models import Receipt
+from app.modules.payments.models import RecurringPayment
+from app.shared.model_utils import utcnow
 from app.presentation.message_templates import amount_label
 from app.presentation.receipts import receipt_html
 
@@ -63,14 +66,14 @@ def confirmation(row, action, description=''):
 
 
 async def open_action(db, query, bot, row, mode):
-    db.execute(delete(BotAction).where(BotAction.expires_at < utcnow()))
+    (await db.execute(delete(BotAction).where(BotAction.expires_at < utcnow())))
     action = BotAction(token=secrets.token_urlsafe(12), occurrence_id=row.id,
                        chat_id=str(query.message.chat.id), user_id=str(query.from_user.id),
                        mode=mode, revision=row.revision, selected_date=row.paid_at or today(),
                        expires_at=utcnow() + timedelta(minutes=15))
     db.add(action)
-    db.commit()
-    payment = db.get(RecurringPayment, row.recurring_id)
+    (await db.commit())
+    payment = (await db.get(RecurringPayment, row.recurring_id))
     description = payment.description
     if mode == 'date':
         text, markup = calendar_text(row, description), calendar_markup(action, action.selected_date.replace(day=1))
@@ -82,23 +85,23 @@ async def open_action(db, query, bot, row, mode):
 
 async def handle_action(db, query, bot, allowed_occurrence):
     parts = (query.data or '').split(':')
-    action = db.get(BotAction, parts[1]) if len(parts) >= 2 else None
+    action = (await db.get(BotAction, parts[1])) if len(parts) >= 2 else None
     if not action or action.expires_at.replace(tzinfo=timezone.utc) < utcnow():
         await query.answer('Выбор даты истек. Откройте действие заново в сообщении счета.', show_alert=True)
         return
     if action.user_id != str(query.from_user.id) or action.chat_id != str(query.message.chat.id):
         await query.answer('Эти кнопки предназначены участнику, который открыл действие.', show_alert=True)
         return
-    row = allowed_occurrence(db, query, action.occurrence_id)
+    row = (await allowed_occurrence(db, query, action.occurrence_id))
     if not row or row.cancelled or row.revision != action.revision:
         await query.answer('Счет уже изменен. Откройте действие заново.', show_alert=True)
         return
     command = parts[0]
-    payment = db.get(RecurringPayment, row.recurring_id)
+    payment = (await db.get(RecurringPayment, row.recurring_id))
     description = payment.description
     if command == 'bn':
-        db.delete(action)
-        db.commit()
+        (await db.delete(action))
+        (await db.commit())
         await query.answer('Действие отменено')
         await query.message.edit_text('Действие отменено. Счет не изменен.')
         return
@@ -115,7 +118,7 @@ async def handle_action(db, query, bot, allowed_occurrence):
             text, markup = calendar_text(row, description), calendar_markup(action, chosen)
         else:
             action.selected_date = chosen
-            db.commit()
+            (await db.commit())
             text, markup = confirmation(row, action, description)
         await query.answer()
         try:
@@ -128,18 +131,18 @@ async def handle_action(db, query, bot, allowed_occurrence):
         await query.answer('Неизвестное действие')
         return
     mode, selected, revision = action.mode, action.selected_date, action.revision
-    claimed = db.execute(delete(BotAction).where(BotAction.token == action.token))
+    claimed = (await db.execute(delete(BotAction).where(BotAction.token == action.token)))
     if not claimed.rowcount:
         await query.answer('Это действие уже подтверждено', show_alert=True)
         return
     actor = f'telegram:{query.from_user.id} ({query.from_user.full_name})'[:200]
     try:
-        row, _ = confirm_occurrence(db, row.id, actor, paid=mode != 'undo',
+        row, _ = (await confirm_occurrence(db, row.id, actor, paid=mode != 'undo',
                                     paid_at=selected if mode != 'undo' else None,
-                                    demo=not row.paid and mode != 'undo', expected_revision=revision)
-        db.commit()
+                                    demo=not row.paid and mode != 'undo', expected_revision=revision))
+        (await db.commit())
     except HTTPException as error:
-        db.rollback()
+        (await db.rollback())
         await query.answer(str(error.detail), show_alert=True)
         return
     await query.answer('Отметка отменена' if mode == 'undo' else 'Оплата сохранена', show_alert=True)
@@ -148,6 +151,6 @@ async def handle_action(db, query, bot, allowed_occurrence):
     except TelegramAPIError:
         pass
     if mode != 'undo':
-        receipt = db.scalar(select(Receipt).where(Receipt.occurrence_id == row.id, Receipt.voided.is_(False)))
+        receipt = (await db.scalar(select(Receipt).where(Receipt.occurrence_id == row.id, Receipt.voided.is_(False))))
         if receipt:
             await bot.send_document(query.message.chat.id, BufferedInputFile(receipt_html(receipt, row, description).encode(), filename=f'{receipt.number}.html'), caption='Демонстрационный чек · дата оплаты сохранена, деньги не списывались.')

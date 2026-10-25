@@ -1,44 +1,45 @@
+from app.integrations.http import create_http_client
 import httpx
 
 from app.integrations.base import Callback, IntegrationError, SentMessage, credentials, response_json
-from app.models import IntegrationConnection
+from app.modules.integrations.models import IntegrationConnection
 
 
 class MattermostAdapter:
     provider = 'mattermost'
 
-    def _client(self, connection: IntegrationConnection) -> httpx.Client:
+    async def _client(self, connection: IntegrationConnection) -> httpx.AsyncClient:
         token = credentials(connection).get('access_token')
         if not token:
             raise IntegrationError('credentials_invalid', 'Не задан Mattermost access token')
-        return httpx.Client(
+        return await create_http_client(
             base_url=connection.base_url.rstrip('/') + '/',
             headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'},
             timeout=15,
             follow_redirects=False,
         )
 
-    def validate(self, connection: IntegrationConnection) -> dict:
-        with self._client(connection) as client:
-            payload = response_json(client.get('api/v4/users/me'))
+    async def validate(self, connection: IntegrationConnection) -> dict:
+        async with await self._client(connection) as client:
+            payload = response_json((await client.get('api/v4/users/me')))
         return {'external_bot_id': payload.get('id'), 'capabilities': {'native_actions': True, 'message_edit': True, 'file_upload': True}}
 
-    def send_invoice(self, connection, chat_id: str, text: str, actions: list[dict]) -> SentMessage:
-        with self._client(connection) as client:
-            payload = response_json(client.post('api/v4/posts', json={'channel_id': chat_id, 'message': text, 'props': self._props(connection, actions)}))
+    async def send_invoice(self, connection, chat_id: str, text: str, actions: list[dict]) -> SentMessage:
+        async with await self._client(connection) as client:
+            payload = response_json((await client.post('api/v4/posts', json={'channel_id': chat_id, 'message': text, 'props': self._props(connection, actions)})))
         return SentMessage(str(payload['id']))
 
-    def update_invoice(self, connection, chat_id: str, message_id: str, text: str, actions: list[dict]) -> SentMessage:
-        with self._client(connection) as client:
-            payload = response_json(client.put(f'api/v4/posts/{message_id}/patch', json={'message': text, 'props': self._props(connection, actions)}))
+    async def update_invoice(self, connection, chat_id: str, message_id: str, text: str, actions: list[dict]) -> SentMessage:
+        async with await self._client(connection) as client:
+            payload = response_json((await client.put(f'api/v4/posts/{message_id}/patch', json={'message': text, 'props': self._props(connection, actions)})))
         return SentMessage(str(payload['id']))
 
-    def send_file(self, connection, chat_id: str, filename: str, content: bytes, caption: str) -> str | None:
+    async def send_file(self, connection, chat_id: str, filename: str, content: bytes, caption: str) -> str | None:
         token = credentials(connection).get('access_token')
         if not token:
             raise IntegrationError('credentials_invalid', 'Не задан Mattermost access token')
-        with httpx.Client(base_url=connection.base_url.rstrip('/') + '/', headers={'Authorization': f'Bearer {token}'}, timeout=30, follow_redirects=False) as client:
-            response = response_json(client.post('api/v4/files', params={'channel_id': chat_id}, files={'files': (filename, content)}))
+        async with await create_http_client(base_url=connection.base_url.rstrip('/') + '/', headers={'Authorization': f'Bearer {token}'}, timeout=30, follow_redirects=False) as client:
+            response = response_json((await client.post('api/v4/files', params={'channel_id': chat_id}, files={'files': (filename, content)})))
         infos = response.get('file_infos') or []
         return str(infos[0]['id']) if infos else None
 

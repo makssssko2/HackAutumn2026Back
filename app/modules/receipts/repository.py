@@ -1,7 +1,8 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession as Session
 
-from app.models import Occurrence, Receipt
+from app.modules.invoices.models import Occurrence
+from app.modules.receipts.models import Receipt
 
 
-def get_receipt_occurrence(db: Session, receipt: Receipt) -> Occurrence | None:
-    return db.get(Occurrence, receipt.occurrence_id)
+async def get_receipt_occurrence(db: Session, receipt: Receipt) -> Occurrence | None:
+    return (await db.get(Occurrence, receipt.occurrence_id))

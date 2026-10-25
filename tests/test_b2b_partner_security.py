@@ -62,10 +62,11 @@ def test_partner_api_key_is_expired_when_expiry_is_in_past():
     assert is_partner_api_key_expired(datetime.now(timezone.utc) - timedelta(seconds=1))
 
 
-def test_require_partner_scope_when_scope_is_granted():
+@pytest.mark.asyncio
+async def test_require_partner_scope_when_scope_is_granted():
     # Given: an authenticated principal with invoice read permission.
     principal = PartnerPrincipal('partner-id', 'test', 'key-id', frozenset({'invoices:read'}))
 
     # When: the matching dependency is invoked.
     # Then: it passes through the isolated partner principal.
-    assert require_partner_scope('invoices:read')(principal) == principal
+    assert await require_partner_scope('invoices:read')(principal) == principal

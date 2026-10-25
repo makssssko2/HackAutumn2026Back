@@ -1,5 +1,5 @@
 import logging
-import time
+import asyncio
 from typing import Any
 
 import httpx
@@ -9,7 +9,8 @@ from sqlalchemy import select
 from app.core.db import SessionLocal
 from app.integrations.actions import handle_callback
 from app.integrations.base import IntegrationError, get_adapter
-from app.models import IntegrationConnection, IntegrationInbox, utcnow
+from app.modules.integrations.models import IntegrationConnection, IntegrationInbox
+from app.shared.model_utils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -24,30 +25,33 @@ def _event_id(event: dict[str, Any]) -> str:
     return str(value) if isinstance(value, (str, int)) else ''
 
 
-def poll_bitrix24() -> None:
-    with SessionLocal() as db:
-        connections = list(db.scalars(select(IntegrationConnection).where(
+async def poll_bitrix24() -> None:
+    async with SessionLocal() as db:
+        connection_ids = list((await db.scalars(select(IntegrationConnection.id).where(
             IntegrationConnection.provider == 'bitrix24', IntegrationConnection.active.is_(True),
             IntegrationConnection.setup_status == 'ready', IntegrationConnection.external_bot_id.is_not(None),
-        )))
-        for connection in connections:
-            _poll_connection(db, connection)
+        ))))
+    for connection_id in connection_ids:
+        async with SessionLocal() as db:
+            connection = await db.get(IntegrationConnection, connection_id)
+            if connection is not None and connection.active and connection.setup_status == 'ready' and connection.external_bot_id:
+                await _poll_connection(db, connection)
 
 
-def _poll_connection(db, connection: IntegrationConnection) -> None:
+async def _poll_connection(db, connection: IntegrationConnection) -> None:
     adapter = get_adapter(connection)
     offset = connection.server_revision
     try:
         while True:
-            page = adapter.poll(connection, offset)
+            page = (await adapter.poll(connection, offset))
             for event in _events(page):
                 external_id = _event_id(event)
                 if not external_id:
                     continue
-                inbox = db.scalar(select(IntegrationInbox).where(
+                inbox = (await db.scalar(select(IntegrationInbox).where(
                     IntegrationInbox.connection_id == connection.id,
                     IntegrationInbox.external_event_id == external_id,
-                ))
+                )))
                 if inbox is None:
                     inbox = IntegrationInbox(
                         connection_id=connection.id,
@@ -58,8 +62,8 @@ def _poll_connection(db, connection: IntegrationConnection) -> None:
                     db.add(inbox)
                     try:
                         if event.get('type') == 'ONIMBOTV2COMMANDADD':
-                            result = handle_callback(db, connection, adapter.parse_callback(connection, event))
-                            adapter.acknowledge_command(connection, event, str(result.get('text', '')))
+                            result = (await handle_callback(db, connection, adapter.parse_callback(connection, event)))
+                            (await adapter.acknowledge_command(connection, event, str(result.get('text', ''))))
                             inbox.result = result
                         else:
                             inbox.result = {'ignored': True}
@@ -69,20 +73,23 @@ def _poll_connection(db, connection: IntegrationConnection) -> None:
                         inbox.result = {'error': error.code}
                     inbox.processed_at = utcnow()
                     connection.last_event_at = utcnow()
-                    db.flush()
+                    (await db.flush())
             next_offset = page.get('nextOffset')
             if isinstance(next_offset, (str, int)):
                 connection.server_revision = str(next_offset)
             connection.health_status = 'healthy'
             connection.last_error_code = None
-            db.commit()
+            (await db.commit())
             if not page.get('hasMore'):
                 break
             offset = connection.server_revision
-            time.sleep(2)
+            (await asyncio.sleep(2))
     except (IntegrationError, ValueError, httpx.HTTPError) as error:
-        db.rollback()
+        (await db.rollback())
+        # Rollback expires ORM attributes even with expire_on_commit=False.
+        # Reload explicitly so error reporting cannot trigger implicit async I/O.
+        await db.refresh(connection)
         connection.health_status = 'error'
         connection.last_error_code = error.code if isinstance(error, IntegrationError) else type(error).__name__
-        db.commit()
+        (await db.commit())
         logger.warning('Bitrix24 polling failed for %s (%s)', connection.id, type(error).__name__)

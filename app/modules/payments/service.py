@@ -7,14 +7,17 @@ from fastapi import HTTPException
 from sqlalchemy import or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession as Session
 
 from app.core.config import today
-from app.models import AuditLog, AudienceGroup, Channel, Delivery, Occurrence, Receipt, RecurringPayment, utcnow
-
-
-def audit(db: Session, actor: str, action: str, object_id=None, **details):
-    db.add(AuditLog(actor=actor, action=action, object_id=object_id, details=details))
+from app.modules.audit.service import audit
+from app.modules.groups.models import AudienceGroup
+from app.modules.channels.models import Channel
+from app.modules.notifications.models import Delivery
+from app.modules.invoices.models import Occurrence
+from app.modules.receipts.models import Receipt
+from app.modules.payments.models import RecurringPayment
+from app.shared.model_utils import utcnow
 
 
 def period_date(first: date, frequency: str, index: int) -> date:
@@ -27,11 +30,11 @@ def period_date(first: date, frequency: str, index: int) -> date:
     return date(year, month, min(first.day, calendar.monthrange(year, month)[1]))
 
 
-def generate_occurrences(db: Session, payment: RecurringPayment, until: date | None = None):
+async def generate_occurrences(db: Session, payment: RecurringPayment, until: date | None = None):
     if not payment.active or payment.payment_type != 'recurring':
         return
     until = max(until or (today() + timedelta(days=400)), payment.first_due_date)
-    existing = set(db.scalars(select(Occurrence.due_date).where(Occurrence.recurring_id == payment.id)))
+    existing = set((await db.scalars(select(Occurrence.due_date).where(Occurrence.recurring_id == payment.id))))
     missing = []
     index = 0
     created_at = utcnow()
@@ -42,19 +45,19 @@ def generate_occurrences(db: Session, payment: RecurringPayment, until: date | N
         if due not in existing:
             missing.append(dict(recurring_id=payment.id, title=payment.title, amount=payment.amount, currency=payment.currency, due_date=due, created_at=created_at))
         index += 1
-    insert_unique(db, Occurrence, missing, ['recurring_id', 'due_date'])
-    db.flush()
+    (await insert_unique(db, Occurrence, missing, ['recurring_id', 'due_date']))
+    (await db.flush())
 
 
-def insert_unique(db: Session, model, values: list[dict], keys: list[str]):
+async def insert_unique(db: Session, model, values: list[dict], keys: list[str]):
     # Both the worker and budget requests generate periods. The unique constraint
     # is the arbiter, so concurrent requests preserve the surrounding transaction.
     insert = sqlite_insert if db.get_bind().dialect.name == 'sqlite' else pg_insert
     for start in range(0, len(values), 100):
-        db.execute(insert(model).values(values[start:start + 100]).on_conflict_do_nothing(index_elements=keys))
+        (await db.execute(insert(model).values(values[start:start + 100]).on_conflict_do_nothing(index_elements=keys)))
 
 
-def target_channels(db: Session, payment: RecurringPayment, occurrence: Occurrence, include_late_channels: bool = False,
+async def target_channels(db: Session, payment: RecurringPayment, occurrence: Occurrence, include_late_channels: bool = False,
                     available_channels: list[Channel] | None = None,
                     available_groups: dict[str, AudienceGroup] | None = None):
     # Forecast creation is not a delivery boundary. External channels are
@@ -63,7 +66,7 @@ def target_channels(db: Session, payment: RecurringPayment, occurrence: Occurren
     if not include_late_channels:
         query = query.where(or_(Channel.kind == 'inapp', Channel.connected_at <= occurrence.released_at))
     if available_channels is None:
-        channels = list(db.scalars(query))
+        channels = list((await db.scalars(query)))
     else:
         released_at = occurrence.released_at
 
@@ -81,44 +84,44 @@ def target_channels(db: Session, payment: RecurringPayment, occurrence: Occurren
     if not payment.group_ids:
         return channels
     groups = available_groups or {
-        group.id: group for group in db.scalars(select(AudienceGroup).where(AudienceGroup.id.in_(payment.group_ids)))
+        group.id: group for group in (await db.scalars(select(AudienceGroup).where(AudienceGroup.id.in_(payment.group_ids))))
     }
     selected = {cid for group_id in payment.group_ids if group_id in groups for cid in groups[group_id].channel_ids}
     return [channel for channel in channels if channel.id in selected or channel.kind == 'inapp']
 
 
-def queue_event(db: Session, occurrence: Occurrence, event: str, include_late_channels: bool = False,
+async def queue_event(db: Session, occurrence: Occurrence, event: str, include_late_channels: bool = False,
                 available_channels: list[Channel] | None = None,
                 available_groups: dict[str, AudienceGroup] | None = None):
-    payment = db.get(RecurringPayment, occurrence.recurring_id)
+    payment = (await db.get(RecurringPayment, occurrence.recurring_id))
     if occurrence.released_at is None and not event.startswith('test:'):
         occurrence.released_at = utcnow()
-        db.flush()
-    insert_unique(db, Delivery, [dict(occurrence_id=occurrence.id, channel_id=channel.id, event=event)
-                   for channel in target_channels(db, payment, occurrence, include_late_channels,
-                                                  available_channels, available_groups)],
-                  ['occurrence_id', 'channel_id', 'event'])
-    db.flush()
+        (await db.flush())
+    (await insert_unique(db, Delivery, [dict(occurrence_id=occurrence.id, channel_id=channel.id, event=event)
+                   for channel in (await target_channels(db, payment, occurrence, include_late_channels,
+                                                  available_channels, available_groups))],
+                  ['occurrence_id', 'channel_id', 'event']))
+    (await db.flush())
 
 
-def create_payment(db: Session, data, actor: str):
+async def create_payment(db: Session, data, actor: str):
     if data.group_ids:
-        found = set(db.scalars(select(AudienceGroup.id).where(AudienceGroup.id.in_(data.group_ids))))
+        found = set((await db.scalars(select(AudienceGroup.id).where(AudienceGroup.id.in_(data.group_ids)))))
         if found != set(data.group_ids):
             raise HTTPException(422, 'Одна из групп рассылки не найдена')
     payment = RecurringPayment(**data.model_dump())
     db.add(payment)
-    db.flush()
-    generate_occurrences(db, payment)
-    first = db.scalar(select(Occurrence).where(Occurrence.recurring_id == payment.id).order_by(Occurrence.due_date))
-    queue_event(db, first, 'reminder' if today() <= first.due_date <= today() + timedelta(days=3) else 'created')
+    (await db.flush())
+    (await generate_occurrences(db, payment))
+    first = (await db.scalar(select(Occurrence).where(Occurrence.recurring_id == payment.id).order_by(Occurrence.due_date)))
+    (await queue_event(db, first, 'reminder' if today() <= first.due_date <= today() + timedelta(days=3) else 'created'))
     audit(db, actor, 'payment.created', payment.id, title=payment.title)
     return payment
 
 
-def create_one_time_payment(db: Session, data, actor: str):
+async def create_one_time_payment(db: Session, data, actor: str):
     if data.group_ids:
-        found = set(db.scalars(select(AudienceGroup.id).where(AudienceGroup.id.in_(data.group_ids))))
+        found = set((await db.scalars(select(AudienceGroup.id).where(AudienceGroup.id.in_(data.group_ids)))))
         if found != set(data.group_ids):
             raise HTTPException(422, 'Одна из групп рассылки не найдена')
     payment = RecurringPayment(
@@ -132,7 +135,7 @@ def create_one_time_payment(db: Session, data, actor: str):
         payment_type='one_time',
     )
     db.add(payment)
-    db.flush()
+    (await db.flush())
     occurrence = Occurrence(
         recurring_id=payment.id,
         title=payment.title,
@@ -141,25 +144,25 @@ def create_one_time_payment(db: Session, data, actor: str):
         due_date=payment.first_due_date,
     )
     db.add(occurrence)
-    db.flush()
+    (await db.flush())
     if occurrence.due_date <= today() + timedelta(days=3):
-        queue_event(db, occurrence, 'reminder')
+        (await queue_event(db, occurrence, 'reminder'))
     audit(db, actor, 'payment.one_time_created', payment.id, title=payment.title)
     return payment
 
 
-def prepare_reminders(db: Session):
-    channels = list(db.scalars(select(Channel).where(Channel.active.is_(True))))
-    groups = {group.id: group for group in db.scalars(select(AudienceGroup))}
-    for payment in db.scalars(select(RecurringPayment).where(RecurringPayment.active.is_(True))):
-        generate_occurrences(db, payment)
-    rows = db.scalars(select(Occurrence).join(RecurringPayment).where(
+async def prepare_reminders(db: Session):
+    channels = list((await db.scalars(select(Channel).where(Channel.active.is_(True)))))
+    groups = {group.id: group for group in (await db.scalars(select(AudienceGroup)))}
+    for payment in (await db.scalars(select(RecurringPayment).where(RecurringPayment.active.is_(True)))):
+        (await generate_occurrences(db, payment))
+    rows = (await db.scalars(select(Occurrence).join(RecurringPayment).where(
         Occurrence.paid.is_(False), Occurrence.cancelled.is_(False),
         RecurringPayment.active.is_(True), Occurrence.due_date >= today(),
         Occurrence.due_date <= today() + timedelta(days=3),
-    ))
+    )))
     for occurrence in rows:
-        queue_event(db, occurrence, 'reminder', available_channels=channels, available_groups=groups)
+        (await queue_event(db, occurrence, 'reminder', available_channels=channels, available_groups=groups))
 
 
 def occurrence_out(row: Occurrence, payment_type: str = 'recurring', description: str = ''):
@@ -175,9 +178,9 @@ def occurrence_out(row: Occurrence, payment_type: str = 'recurring', description
     }
 
 
-def confirm_occurrence(db: Session, occurrence_id: str, actor: str, paid: bool | None = None,
+async def confirm_occurrence(db: Session, occurrence_id: str, actor: str, paid: bool | None = None,
                        paid_at: date | None = None, demo: bool = False, expected_revision: int | None = None):
-    row = db.get(Occurrence, occurrence_id)
+    row = (await db.get(Occurrence, occurrence_id))
     if not row:
         raise HTTPException(404, 'Счет не найден')
     if row.cancelled:
@@ -195,48 +198,48 @@ def confirm_occurrence(db: Session, occurrence_id: str, actor: str, paid: bool |
     revision = row.revision
     was_paid = row.paid
     payer = row.paid_by if was_paid and desired_paid else (actor if desired_paid else None)
-    changed = db.execute(update(Occurrence).where(Occurrence.id == row.id, Occurrence.revision == revision).values(
+    changed = (await db.execute(update(Occurrence).where(Occurrence.id == row.id, Occurrence.revision == revision).values(
         paid=desired_paid, paid_at=desired_date, paid_by=payer, revision=revision + 1,
-    ), execution_options={'synchronize_session': False})
+    ), execution_options={'synchronize_session': False}))
     if changed.rowcount != 1:
         raise HTTPException(409, 'Счет уже изменен другим участником')
-    db.refresh(row)
-    previous_receipts = list(db.scalars(select(Receipt).where(Receipt.occurrence_id == row.id, Receipt.voided.is_(False))))
+    (await db.refresh(row))
+    previous_receipts = list((await db.scalars(select(Receipt).where(Receipt.occurrence_id == row.id, Receipt.voided.is_(False)))))
     for receipt in previous_receipts:
         receipt.voided = True
     if desired_paid and (demo or previous_receipts):
         db.add(Receipt(occurrence_id=row.id, number=f'DEMO-{today():%Y%m%d}-{secrets.token_hex(4).upper()}', paid_at=desired_date, payer=payer))
-    queue_event(db, row, f'state:{row.revision}')
+    (await queue_event(db, row, f'state:{row.revision}'))
     audit(db, actor, 'occurrence.paid' if desired_paid else 'occurrence.unpaid', row.id,
           title=row.title, paid_at=str(desired_date) if desired_date else None, demo=demo, revision=row.revision)
-    db.flush()
+    (await db.flush())
     return row, True
 
 
-def stop_payment(db: Session, payment: RecurringPayment, actor: str):
+async def stop_payment(db: Session, payment: RecurringPayment, actor: str):
     payment.active = False
     payment.stopped_at = today()
-    future = db.scalars(select(Occurrence).where(Occurrence.recurring_id == payment.id, Occurrence.paid.is_(False), Occurrence.due_date >= today()))
+    future = (await db.scalars(select(Occurrence).where(Occurrence.recurring_id == payment.id, Occurrence.paid.is_(False), Occurrence.due_date >= today())))
     for row in future:
         row.cancelled = True
         row.revision += 1
         # Budget periods that have never been issued must not produce a burst
         # of cancellation messages when a recurring payment is stopped.
-        if db.scalar(select(Delivery.id).where(Delivery.occurrence_id == row.id).limit(1)):
-            queue_event(db, row, f'state:{row.revision}')
+        if (await db.scalar(select(Delivery.id).where(Delivery.occurrence_id == row.id).limit(1))):
+            (await queue_event(db, row, f'state:{row.revision}'))
     audit(db, actor, 'payment.stopped', payment.id, title=payment.title)
 
 
-def cancel_one_time_payment(db: Session, payment: RecurringPayment, actor: str):
-    occurrence = db.scalar(select(Occurrence).where(Occurrence.recurring_id == payment.id))
+async def cancel_one_time_payment(db: Session, payment: RecurringPayment, actor: str):
+    occurrence = (await db.scalar(select(Occurrence).where(Occurrence.recurring_id == payment.id)))
     if not occurrence or occurrence.paid:
         raise HTTPException(409, 'Оплаченный разовый платеж нельзя отменить')
     payment.active = False
     payment.stopped_at = today()
     occurrence.cancelled = True
     occurrence.revision += 1
-    if db.scalar(select(Delivery.id).where(Delivery.occurrence_id == occurrence.id).limit(1)):
-        queue_event(db, occurrence, f'state:{occurrence.revision}')
+    if (await db.scalar(select(Delivery.id).where(Delivery.occurrence_id == occurrence.id).limit(1))):
+        (await queue_event(db, occurrence, f'state:{occurrence.revision}'))
     audit(db, actor, 'payment.one_time_cancelled', payment.id, title=payment.title)
 
 

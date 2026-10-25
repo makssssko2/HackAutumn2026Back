@@ -4,9 +4,9 @@ SessionLocal = implementation.SessionLocal
 settings = implementation.settings
 
 
-def bootstrap():
+async def bootstrap():
     implementation.SessionLocal = SessionLocal
-    implementation.bootstrap()
+    (await implementation.bootstrap())
 
 
 __all__ = ['SessionLocal', 'bootstrap', 'settings']

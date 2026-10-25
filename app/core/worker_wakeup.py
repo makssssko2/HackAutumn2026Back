@@ -1,6 +1,6 @@
 """Wake the delivery worker without replacing the durable database queue."""
+import asyncio
 import logging
-import time
 
 import psycopg
 from sqlalchemy.engine import make_url
@@ -16,48 +16,52 @@ class WorkerWakeup:
                     if url.get_backend_name() == 'postgresql' else None)
         self.connection = None
 
-    def connect(self):
+    async def connect(self):
         if self.dsn is None:
             return
         try:
-            self.connection = psycopg.connect(self.dsn, autocommit=True, connect_timeout=5)
-            self.connection.execute(f'LISTEN {CHANNEL}')
+            self.connection = await psycopg.AsyncConnection.connect(
+                self.dsn, autocommit=True, connect_timeout=5)
+            await self.connection.execute(f'LISTEN {CHANNEL}')
             logger.info('Delivery wakeup listener connected')
         except psycopg.Error as exc:
-            self.close()
+            await self.close()
             logger.warning('Delivery wakeup unavailable; periodic checks remain active (%s)', type(exc).__name__)
+        except asyncio.CancelledError:
+            await self.close()
+            raise
 
-    def wait(self, seconds: float) -> bool:
+    async def wait(self, seconds: float) -> bool:
         if seconds <= 0:
             return False
         if self.connection is None:
-            self.connect()
+            await self.connect()
             if self.connection is None:
-                time.sleep(seconds)
+                await asyncio.sleep(seconds)
                 return False
-            # Drain persisted work immediately after reconnecting: signals sent
-            # while disconnected are not retained by LISTEN/NOTIFY.
+            # Signals sent while disconnected are not retained by LISTEN/NOTIFY.
+            # Scan persisted work immediately after reconnecting.
             return True
         try:
             notifications = self.connection.notifies(timeout=seconds, stop_after=1)
             try:
-                return next(notifications, None) is not None
+                return await anext(notifications, None) is not None
             finally:
-                notifications.close()
+                await notifications.aclose()
         except psycopg.Error as exc:
-            self.close()
+            await self.close()
             logger.warning('Delivery wakeup disconnected (%s)', type(exc).__name__)
             return True
 
-    def close(self):
+    async def close(self):
         if self.connection is not None:
-            self.connection.close()
-            self.connection = None
+            connection, self.connection = self.connection, None
+            await connection.close()
 
-    def __enter__(self):
+    async def __aenter__(self):
         # Subscribe before the initial queue scan to avoid a startup race.
-        self.connect()
+        await self.connect()
         return self
 
-    def __exit__(self, *_):
-        self.close()
+    async def __aexit__(self, *_):
+        await self.close()

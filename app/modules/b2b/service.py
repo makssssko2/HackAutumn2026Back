@@ -4,9 +4,9 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession as Session
 
-from app.models import utcnow
+from app.shared.model_utils import utcnow
 from app.modules.b2b.models import (BusinessPartner, BuyerOrganization, IncomingInvoice,
                              IncomingInvoiceHistory,
                             IncomingInvoiceOutbox, IncomingInvoicePayment,
@@ -21,7 +21,7 @@ def record_history(db: Session, invoice: IncomingInvoice, action: str, actor_typ
     db.add(IncomingInvoiceHistory(invoice_id=invoice.id, action=action, previous_state=previous, new_state=invoice_state(invoice), actor_type=actor_type, actor_id=actor_id, reason=reason))
 
 
-def enqueue_invoice_event(db: Session, invoice: IncomingInvoice, event_type: str) -> None:
+async def enqueue_invoice_event(db: Session, invoice: IncomingInvoice, event_type: str) -> None:
     payload = {
         'invoice_id': invoice.id,
         'revision': invoice.revision,
@@ -47,7 +47,7 @@ def enqueue_invoice_event(db: Session, invoice: IncomingInvoice, event_type: str
     else:
         db.add(IncomingInvoiceOutbox(**values))
         return
-    db.execute(statement.on_conflict_do_nothing(index_elements=['invoice_id', 'revision', 'event_type']))
+    (await db.execute(statement.on_conflict_do_nothing(index_elements=['invoice_id', 'revision', 'event_type'])))
 
 
 def require_revision(invoice: IncomingInvoice, expected_revision: int) -> None:
@@ -55,13 +55,13 @@ def require_revision(invoice: IncomingInvoice, expected_revision: int) -> None:
         raise HTTPException(409, 'revision_conflict')
 
 
-def validate_create_references(db: Session, partner_id: str, buyer_id: str, account_id: str) -> tuple[BuyerOrganization, PartnerBankAccount]:
-    buyer = db.get(BuyerOrganization, buyer_id)
-    account = db.scalar(select(PartnerBankAccount).where(PartnerBankAccount.id == account_id, PartnerBankAccount.partner_id == partner_id, PartnerBankAccount.active.is_(True), PartnerBankAccount.verified.is_(True)))
+async def validate_create_references(db: Session, partner_id: str, buyer_id: str, account_id: str) -> tuple[BuyerOrganization, PartnerBankAccount]:
+    buyer = (await db.get(BuyerOrganization, buyer_id))
+    account = (await db.scalar(select(PartnerBankAccount).where(PartnerBankAccount.id == account_id, PartnerBankAccount.partner_id == partner_id, PartnerBankAccount.active.is_(True), PartnerBankAccount.verified.is_(True))))
     if buyer is None or not buyer.active or account is None:
         raise HTTPException(422, 'Buyer access or verified bank account is unavailable')
     from app.modules.b2b.models import PartnerBuyerAccess
-    access = db.scalar(select(PartnerBuyerAccess.id).where(PartnerBuyerAccess.partner_id == partner_id, PartnerBuyerAccess.buyer_id == buyer_id))
+    access = (await db.scalar(select(PartnerBuyerAccess.id).where(PartnerBuyerAccess.partner_id == partner_id, PartnerBuyerAccess.buyer_id == buyer_id)))
     if access is None:
         raise HTTPException(422, 'Buyer access is unavailable')
     return buyer, account
@@ -79,7 +79,7 @@ def snapshot_account(account: PartnerBankAccount) -> dict:
     return {'account_number': account.account_number, 'bank_name': account.bank_name, 'bank_bic': account.bank_bic, 'correspondent_account': account.correspondent_account}
 
 
-def submit_invoice(db: Session, invoice: IncomingInvoice, expected_revision: int, actor_id: str) -> None:
+async def submit_invoice(db: Session, invoice: IncomingInvoice, expected_revision: int, actor_id: str) -> None:
     require_revision(invoice, expected_revision)
     # Compatibility for existing integrations. New JSON invoices are already
     # submitted by POST /invoices; repeating submit must not enqueue twice.
@@ -87,8 +87,8 @@ def submit_invoice(db: Session, invoice: IncomingInvoice, expected_revision: int
         return
     if invoice.review_status != 'draft':
         raise HTTPException(409, 'invalid_transition')
-    partner = db.get(BusinessPartner, invoice.partner_id)
-    buyer, account = validate_create_references(db, invoice.partner_id, invoice.buyer_id, invoice.bank_account_id)
+    partner = (await db.get(BusinessPartner, invoice.partner_id))
+    buyer, account = (await validate_create_references(db, invoice.partner_id, invoice.buyer_id, invoice.bank_account_id))
     if partner is None or partner.status != 'active':
         raise HTTPException(409, 'Invoice references are unavailable')
     previous = invoice_state(invoice)
@@ -99,10 +99,10 @@ def submit_invoice(db: Session, invoice: IncomingInvoice, expected_revision: int
     invoice.submitted_at = utcnow()
     invoice.revision += 1
     record_history(db, invoice, 'submitted', 'partner', actor_id, previous)
-    enqueue_invoice_event(db, invoice, 'incoming_invoice.submitted')
+    (await enqueue_invoice_event(db, invoice, 'incoming_invoice.submitted'))
 
 
-def transition_invoice(db: Session, invoice: IncomingInvoice, expected_revision: int, action: str, actor_type: str, actor_id: str, reason: str | None = None) -> None:
+async def transition_invoice(db: Session, invoice: IncomingInvoice, expected_revision: int, action: str, actor_type: str, actor_id: str, reason: str | None = None) -> None:
     require_revision(invoice, expected_revision)
     # Existing approved invoices remain payable and cancellable by their
     # supplier. Administrators only record/reverse payments, never moderate.
@@ -116,10 +116,10 @@ def transition_invoice(db: Session, invoice: IncomingInvoice, expected_revision:
     invoice.decision_reason = reason
     invoice.revision += 1
     record_history(db, invoice, 'cancelled', actor_type, actor_id, previous, reason)
-    enqueue_invoice_event(db, invoice, 'incoming_invoice.cancelled')
+    (await enqueue_invoice_event(db, invoice, 'incoming_invoice.cancelled'))
 
 
-def record_payment(db: Session, invoice: IncomingInvoice, expected_revision: int, amount: Decimal, paid_at, reference: str, user_id: str) -> None:
+async def record_payment(db: Session, invoice: IncomingInvoice, expected_revision: int, amount: Decimal, paid_at, reference: str, user_id: str) -> None:
     require_revision(invoice, expected_revision)
     if invoice.review_status not in {'submitted', 'approved'} or invoice.payment_status != 'unpaid' or amount != invoice.amount:
         raise HTTPException(409, 'invalid_payment')
@@ -128,12 +128,12 @@ def record_payment(db: Session, invoice: IncomingInvoice, expected_revision: int
     invoice.payment_status = 'paid'
     invoice.revision += 1
     record_history(db, invoice, 'payment_recorded', 'admin', user_id, previous)
-    enqueue_invoice_event(db, invoice, 'incoming_invoice.payment_recorded')
+    (await enqueue_invoice_event(db, invoice, 'incoming_invoice.payment_recorded'))
 
 
-def reverse_payment(db: Session, invoice: IncomingInvoice, expected_revision: int, reason: str, user_id: str) -> None:
+async def reverse_payment(db: Session, invoice: IncomingInvoice, expected_revision: int, reason: str, user_id: str) -> None:
     require_revision(invoice, expected_revision)
-    payment = db.scalar(select(IncomingInvoicePayment).where(IncomingInvoicePayment.invoice_id == invoice.id, IncomingInvoicePayment.reversed_at.is_(None)))
+    payment = (await db.scalar(select(IncomingInvoicePayment).where(IncomingInvoicePayment.invoice_id == invoice.id, IncomingInvoicePayment.reversed_at.is_(None))))
     if invoice.payment_status != 'paid' or payment is None:
         raise HTTPException(409, 'invalid_payment_reversal')
     previous = invoice_state(invoice)
@@ -143,4 +143,4 @@ def reverse_payment(db: Session, invoice: IncomingInvoice, expected_revision: in
     invoice.payment_status = 'unpaid'
     invoice.revision += 1
     record_history(db, invoice, 'payment_reversed', 'admin', user_id, previous, reason)
-    enqueue_invoice_event(db, invoice, 'incoming_invoice.payment_reversed')
+    (await enqueue_invoice_event(db, invoice, 'incoming_invoice.payment_reversed'))

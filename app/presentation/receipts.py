@@ -1,6 +1,7 @@
 from html import escape
 
-from app.models import Occurrence, Receipt
+from app.modules.invoices.models import Occurrence
+from app.modules.receipts.models import Receipt
 
 
 def receipt_html(receipt: Receipt, occurrence: Occurrence, description: str = ''):

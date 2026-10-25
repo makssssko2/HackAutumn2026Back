@@ -5,7 +5,7 @@ from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, For
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
-from app.shared.models import uid, utcnow
+from app.shared.model_utils import uid, utcnow
 
 
 class BuyerOrganization(Base):
