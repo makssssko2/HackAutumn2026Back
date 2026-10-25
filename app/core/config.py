@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     app_timezone: str = 'Europe/Moscow'
     frontend_origin: str = 'http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080,http://127.0.0.1:8080'
     cookie_secure: bool = False
+    password_change_enabled: bool = True
     public_frontend_url: str = 'http://localhost:5173'
     public_invoice_view_enabled: bool = False
     telegram_bot_token: str = ''

@@ -7,6 +7,7 @@ from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
+from app.core.config import settings
 from app.core.security import current_user, hash_password, token_hash, verify_password
 from app.shared.formatters import user_out
 from app.modules.payments.service import audit
@@ -72,6 +73,8 @@ def update_me(data: ProfilePatch, user: User = Depends(current_user), db: Sessio
 @router.post('/password')
 def change_password(data: PasswordChange, response: Response,
                     user: User = Depends(current_user), db: Session = Depends(get_db)):
+    if not settings.password_change_enabled:
+        raise HTTPException(403, 'Смена пароля отключена администратором')
     key = f'password:{user.id}'
     now = datetime.now(timezone.utc)
     login_attempts[key] = [s for s in login_attempts[key] if now - s < timedelta(minutes=1)]

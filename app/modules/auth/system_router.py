@@ -22,6 +22,7 @@ def app_settings(user: User = Depends(current_user)):
         'timezone': settings.app_timezone,
         'today': today(),
         'demo_mode': True,
+        'password_change_enabled': settings.password_change_enabled,
         'telegram_configured': bool(settings.telegram_bot_token),
         'smtp_configured': bool(settings.smtp_host),
     }

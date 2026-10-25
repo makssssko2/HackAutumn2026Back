@@ -10,6 +10,40 @@ from sqlalchemy import select
 from app.main import app
 from app.models import AuditLog, AuthSession, User, utcnow
 from app.security import token_hash, verify_password
+from app.core.config import Settings, settings
+
+
+@pytest.mark.parametrize('value,expected', [('false', False), ('true', True)])
+def test_password_change_env_setting(monkeypatch, value, expected):
+    monkeypatch.setenv('PASSWORD_CHANGE_ENABLED', value)
+    assert Settings(_env_file=None).password_change_enabled is expected
+
+
+@pytest.mark.parametrize('login,password', [('admin', 'admin12345'), ('user', 'user12345')])
+def test_disabled_password_change_preserves_credentials_and_sessions(client, db_factory, monkeypatch, login, password):
+    monkeypatch.setattr(settings, 'password_change_enabled', False)
+    client.post('/api/v1/auth/login', json={'login': login, 'password': password})
+    cookie = client.cookies.get('ik_session')
+    assert client.get('/api/v1/settings').json()['password_change_enabled'] is False
+    for current in (password, 'wrong-password'):
+        response = client.post('/api/v1/auth/password', json={
+            'current_password': current, 'new_password': 'new-password-123',
+        })
+        assert response.status_code == 403
+    assert client.cookies.get('ik_session') == cookie
+    assert client.get('/api/v1/auth/me').status_code == 200
+    assert client.patch('/api/v1/auth/me', json={'name': 'Updated'}).status_code == 200
+    with db_factory() as db:
+        user = db.scalar(select(User).where(User.login == login))
+        assert verify_password(password, user.password_hash)
+        assert db.get(AuthSession, token_hash(cookie)) is not None
+        assert db.scalar(select(AuditLog).where(AuditLog.action == 'profile.password_changed')) is None
+    # The same API supports switching the feature back on.
+    monkeypatch.setattr(settings, 'password_change_enabled', True)
+    assert client.get('/api/v1/settings').json()['password_change_enabled'] is True
+    assert client.post('/api/v1/auth/password', json={
+        'current_password': password, 'new_password': 'new-password-123',
+    }).status_code == 200
 
 
 @pytest.mark.parametrize('login,password', [('admin', 'admin12345'), ('user', 'user12345')])
