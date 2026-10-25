@@ -8,10 +8,10 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.db import get_db
 from app.core.security import current_user
-from app.domain.formatters import public
-from app.domain.services import audit
+from app.shared.formatters import public
+from app.modules.payments.service import audit
 from app.models import Attachment, Occurrence, User, uid
-from app.repositories.base import get_or_404
+from app.shared.repository import get_or_404
 from app.schemas import LinkIn
 
 router = APIRouter(tags=['Attachments'])
