@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.db import get_db
-from app.models_b2b import BusinessPartner, PartnerApiKey
+from app.modules.b2b.models import BusinessPartner, PartnerApiKey
 
 
 API_KEY_PREFIX: Final = 'b2b_'

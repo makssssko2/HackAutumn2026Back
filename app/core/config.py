@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     b2b_clamav_host: str = ''
     b2b_clamav_port: int = 3310
     b2b_idempotency_ttl_days: int = 7
+    b2b_rate_limit_per_minute: int = 120
+    rate_limit_max_keys: int = 10_000
 
     @model_validator(mode='after')
     def validate_b2b_settings(self):
@@ -54,6 +56,8 @@ class Settings(BaseSettings):
         if self.b2b_enabled and (self.b2b_document_max_bytes <= 0 or self.b2b_document_max_files <= 0
                                  or self.b2b_document_max_total_bytes <= 0 or self.b2b_idempotency_ttl_days <= 0):
             raise ValueError('B2B document and idempotency limits must be positive when B2B is enabled')
+        if self.b2b_rate_limit_per_minute <= 0 or self.rate_limit_max_keys <= 0:
+            raise ValueError('Rate-limit settings must be positive')
         return self
 
     @field_validator('public_frontend_url')
