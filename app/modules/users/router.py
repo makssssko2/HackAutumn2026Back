@@ -3,12 +3,12 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.security import admin_user, hash_password
-from app.domain.formatters import user_out
-from app.domain.services import audit
+from app.shared.formatters import user_out
+from app.modules.payments.service import audit
 from app.models import User
-from app.repositories.base import get_or_404
-from app.repositories.users import list_users, login_exists, revoke_user_sessions
-from app.repositories.pagination import PageRequest, collection_page
+from app.shared.repository import get_or_404
+from app.modules.users.repository import login_exists, revoke_user_sessions
+from app.shared.pagination import PageRequest, collection_page
 from app.schemas import UserIn, UserPatch
 
 router = APIRouter(prefix='/api/v1/users', tags=['Users'])
