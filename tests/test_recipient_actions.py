@@ -9,9 +9,9 @@ from sqlalchemy import select
 
 from app.config import today
 from app.models import BotAction, Channel, Delivery, Occurrence, PaymentLink, Receipt, utcnow
-from app.payment_access import email_payment_url
+from app.modules.invoices.payment_access import email_payment_url
 from app.schemas import RecurringIn
-from app.services import create_payment
+from app.modules.payments.service import create_payment
 
 
 def invoice(db, kind='email'):
@@ -93,7 +93,7 @@ def query(data, user=11, chat=-100123):
 
 
 def test_bot_calendar_backdate_correction_undo_and_actor_binding(db_factory, monkeypatch):
-    import app.telegram_bot as telegram
+    import app.workers.telegram_bot as telegram
     monkeypatch.setattr(telegram, 'SessionLocal', db_factory)
     monkeypatch.setattr(Message, 'edit_text', AsyncMock())
     bot = SimpleNamespace(send_message=AsyncMock(), send_document=AsyncMock())
@@ -128,7 +128,7 @@ def test_bot_calendar_backdate_correction_undo_and_actor_binding(db_factory, mon
 
 
 def test_bot_rejects_stale_confirmation(db_factory, monkeypatch):
-    import app.telegram_bot as telegram
+    import app.workers.telegram_bot as telegram
     monkeypatch.setattr(telegram, 'SessionLocal', db_factory)
     bot = SimpleNamespace(send_message=AsyncMock(), send_document=AsyncMock())
     with db_factory() as db:
@@ -144,9 +144,9 @@ def test_bot_rejects_stale_confirmation(db_factory, monkeypatch):
 
 
 def test_message_templates_escape_html_and_keyboard_callbacks(db_factory):
-    from app.message_templates import telegram_message, email_html
-    from app.notifications import telegram_buttons
-    from app.bot_interactions import calendar_markup
+    from app.presentation.message_templates import telegram_message, email_html
+    from app.modules.notifications.service import telegram_buttons
+    from app.workers.bot_interactions import calendar_markup
     with db_factory() as db:
         row, _, _ = invoice(db)
         for text in [telegram_message(row, 'reminder', 'Описание <канала> & детали'), email_html(row, 'reminder', 'https://example.com/pay/demo', 'Описание <канала> & детали')]:

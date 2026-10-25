@@ -5,7 +5,7 @@ from fastapi import HTTPException
 from sqlalchemy import event, select
 
 from app.config import today
-from app.domain.services import confirm_occurrence, generate_occurrences, prepare_reminders
+from app.modules.payments.service import confirm_occurrence, generate_occurrences, prepare_reminders
 from app.models import Channel, Delivery, Occurrence, Receipt, RecurringPayment
 
 

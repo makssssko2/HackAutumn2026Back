@@ -9,10 +9,10 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings, today
 from app.core.db import get_db
-from app.domain.services import confirm_occurrence, occurrence_out
+from app.modules.payments.service import confirm_occurrence, occurrence_out
 from app.models import Channel, PaymentLink, Occurrence, Receipt, utcnow
 from app.presentation.receipts import receipt_html
-from app.repositories.occurrences import get_occurrence_payment
+from app.modules.invoices.repository import get_occurrence_payment
 
 router = APIRouter(prefix='/api/v1/public/payments', tags=['Recipient payment'])
 

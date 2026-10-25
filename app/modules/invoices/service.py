@@ -1,5 +1,5 @@
 from app.core.config import settings
-from app.repositories.invoice_view_links import get_or_create_view_link
+from app.modules.invoices.view_links import get_or_create_view_link
 
 
 def invoice_view_url(db, occurrence_id: str):

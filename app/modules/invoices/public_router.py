@@ -2,9 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
-from app.domain.services import occurrence_out
-from app.repositories.invoice_view_links import get_view_occurrence
-from app.repositories.occurrences import get_occurrence_payment
+from app.modules.payments.service import occurrence_out
+from app.modules.invoices.view_links import get_view_occurrence
+from app.modules.invoices.repository import get_occurrence_payment
 from app.schemas import PublicInvoiceView
 
 

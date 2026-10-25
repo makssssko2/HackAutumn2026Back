@@ -5,19 +5,18 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.security import current_user
-from app.domain.formatters import public
-from app.domain.services import confirm_occurrence, occurrence_out
+from app.shared.formatters import public
+from app.modules.payments.service import confirm_occurrence, occurrence_out
 from app.models import AuditLog, Attachment, Occurrence, Receipt, User
 from sqlalchemy import select
-from app.repositories.base import get_or_404
-from app.repositories.pagination import PageRequest, fetch_page
-from app.repositories.occurrences import (
+from app.shared.repository import get_or_404
+from app.shared.pagination import PageRequest, fetch_page
+from app.modules.invoices.repository import (
     get_occurrence_payment,
     get_occurrence_payment_data,
     list_occurrence_attachments,
     list_occurrence_history,
     list_occurrence_receipts,
-    list_occurrences,
     occurrences_query,
 )
 from app.schemas import OccurrencePatch

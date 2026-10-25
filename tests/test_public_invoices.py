@@ -13,10 +13,10 @@ from sqlalchemy import func, select
 
 from app.core.config import Settings, settings, today
 from app.core.logging import PublicInvoiceLogFilter
-from app.domain.invoice_views import invoice_view_url
-from app.domain.services import confirm_occurrence
+from app.modules.invoices.service import invoice_view_url
+from app.modules.payments.service import confirm_occurrence
 from app.models import Channel, Delivery, InvoiceViewLink, Occurrence, Receipt, RecurringPayment
-from app.repositories.invoice_view_links import get_or_create_view_link, revoke_view_link
+from app.modules.invoices.view_links import get_or_create_view_link, revoke_view_link
 
 
 @pytest.fixture(autouse=True)
@@ -155,7 +155,7 @@ def test_concurrent_delivery_links_are_stable_and_periods_are_independent(db_fac
 
 @pytest.mark.parametrize('state', ['unpaid', 'paid', 'cancelled'])
 def test_telegram_keeps_actions_and_view_on_send_and_edit(db_factory, monkeypatch, state):
-    import app.notifications as notifications
+    import app.modules.notifications.service as notifications
     from app.presentation.message_templates import telegram_message
     captured = []
     with db_factory() as db:
@@ -192,7 +192,7 @@ def test_telegram_keeps_actions_and_view_on_send_and_edit(db_factory, monkeypatc
 
 
 def test_uncertain_telegram_retry_preserves_published_url(db_factory, monkeypatch):
-    import app.notifications as notifications
+    import app.modules.notifications.service as notifications
     urls = []
     def telegram(method, payload):
         urls.append(payload['reply_markup']['inline_keyboard'][-1][0]['url'])
@@ -209,7 +209,7 @@ def test_uncertain_telegram_retry_preserves_published_url(db_factory, monkeypatc
 
 
 def test_email_preserves_payment_link_and_adds_read_only_link(db_factory, monkeypatch):
-    import app.notifications as notifications
+    import app.modules.notifications.service as notifications
     captured = {}
     class SMTP:
         def __enter__(self): return self
@@ -230,7 +230,7 @@ def test_email_preserves_payment_link_and_adds_read_only_link(db_factory, monkey
 
 
 def test_webhook_adds_signed_url_and_inapp_never_publishes(db_factory, monkeypatch):
-    import app.notifications as notifications
+    import app.modules.notifications.service as notifications
     captured = {}
     class Client:
         def __enter__(self): return self
@@ -251,7 +251,7 @@ def test_webhook_adds_signed_url_and_inapp_never_publishes(db_factory, monkeypat
 
 
 def test_disabled_feature_does_not_create_or_send_links(db_factory, monkeypatch):
-    import app.notifications as notifications
+    import app.modules.notifications.service as notifications
     captured = {}
     monkeypatch.setattr(settings, 'public_invoice_view_enabled', False)
     monkeypatch.setattr(notifications, 'telegram_call', lambda method, payload: captured.update(payload) or {'message_id': 7})
