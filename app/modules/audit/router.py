@@ -3,10 +3,9 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.security import admin_user
-from app.domain.formatters import public
+from app.shared.formatters import public
 from app.models import AuditLog, User
-from app.repositories.audit import list_audit_logs
-from app.repositories.pagination import PageRequest, collection_page
+from app.shared.pagination import PageRequest, collection_page
 
 router = APIRouter(prefix='/api/v1/audit', tags=['Audit'])
 
