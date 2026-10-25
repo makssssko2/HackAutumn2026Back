@@ -6,14 +6,28 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import attachments, audit, auth, b2b, channels, groups, incoming_invoices, integrations, notifications, occurrences, one_time_payments, payments, receipts, reports, system, users
-from app.api.auth import login_attempts  # re-exported for tests and legacy imports
-from app.notifications import telegram_call  # re-exported: tests monkeypatch main.telegram_call
+from app.modules.attachments import router as attachments
+from app.modules.audit import router as audit
+from app.modules.auth import router as auth
+from app.modules.b2b import admin_router as incoming_invoices
+from app.modules.b2b import router as b2b
+from app.modules.channels import router as channels
+from app.modules.groups import router as groups
+from app.modules.integrations import router as integrations
+from app.modules.invoices import router as occurrences
+from app.modules.notifications import router as notifications
+from app.modules.payments import one_time_router, reports_router, router as payments
+from app.modules.receipts import router as receipts
+from app.modules.users import router as users
+from app.modules.auth.router import login_attempts  # re-exported for tests and legacy imports
+from app.modules.auth import system_router as system
+from app.modules.notifications.service import telegram_call  # re-exported for tests
 from app.core.bootstrap import bootstrap
 from app.core.config import settings
 from app.core.logging import protect_public_invoice_logs
-from app.api.public_invoices import router as public_invoice_router
-from app.payment_access import router as payment_access_router
+from app.modules.invoices.public_router import router as public_invoice_router
+from app.modules.invoices.payment_access import router as payment_access_router
+from app.core.rate_limit import SlidingWindowLimiter
 
 __all__ = ['app', 'login_attempts', 'telegram_call']
 
@@ -45,6 +59,8 @@ app.add_middleware(
     allow_headers=['Content-Type'],
 )
 
+b2b_rate_limiter = SlidingWindowLimiter(settings.b2b_rate_limit_per_minute, 60, settings.rate_limit_max_keys)
+
 
 @app.exception_handler(RequestValidationError)
 async def validation_error(request: Request, exc: RequestValidationError):
@@ -59,6 +75,11 @@ async def validation_error(request: Request, exc: RequestValidationError):
 
 @app.middleware('http')
 async def protect_origins(request: Request, call_next):
+    if settings.b2b_enabled and request.url.path.startswith('/api/b2b/v1/'):
+        client_host = request.client.host if request.client else 'unknown'
+        if not b2b_rate_limiter.allow(f'b2b-ip:{client_host}'):
+            return JSONResponse({'detail': 'Слишком много запросов. Попробуйте позже'}, status_code=429,
+                                headers={'Retry-After': '60'})
     origin = request.headers.get('origin')
     if request.method in ('POST', 'PATCH', 'DELETE', 'PUT') and origin and origin not in settings.allowed_origins:
         return JSONResponse({'detail': 'Недопустимый источник запроса'}, status_code=403)
@@ -79,10 +100,10 @@ app.include_router(system.router)
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(payments.router)
-app.include_router(one_time_payments.router)
+app.include_router(one_time_router.router)
 app.include_router(integrations.router)
 app.include_router(occurrences.router)
-app.include_router(reports.router)
+app.include_router(reports_router.router)
 app.include_router(channels.router)
 app.include_router(groups.router)
 app.include_router(notifications.router)
