@@ -3,12 +3,11 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.security import admin_user, current_user
-from app.domain.formatters import public
-from app.domain.services import create_payment, stop_payment
+from app.shared.formatters import public
+from app.modules.payments.service import create_payment, stop_payment
 from app.models import RecurringPayment, User
-from app.repositories.base import get_or_404
-from app.repositories.payments import list_payments
-from app.repositories.pagination import PageRequest, collection_page
+from app.shared.repository import get_or_404
+from app.shared.pagination import PageRequest, collection_page
 from app.schemas import RecurringIn
 
 router = APIRouter(prefix='/api/v1/recurring-payments', tags=['Payments'])

@@ -54,27 +54,50 @@ def insert_unique(db: Session, model, values: list[dict], keys: list[str]):
         db.execute(insert(model).values(values[start:start + 100]).on_conflict_do_nothing(index_elements=keys))
 
 
-def target_channels(db: Session, payment: RecurringPayment, occurrence: Occurrence, include_late_channels: bool = False):
+def target_channels(db: Session, payment: RecurringPayment, occurrence: Occurrence, include_late_channels: bool = False,
+                    available_channels: list[Channel] | None = None,
+                    available_groups: dict[str, AudienceGroup] | None = None):
     # Forecast creation is not a delivery boundary. External channels are
     # eligible only when they were connected before the occurrence was released.
     query = select(Channel).where(Channel.active.is_(True))
     if not include_late_channels:
         query = query.where(or_(Channel.kind == 'inapp', Channel.connected_at <= occurrence.released_at))
-    channels = list(db.scalars(query))
+    if available_channels is None:
+        channels = list(db.scalars(query))
+    else:
+        released_at = occurrence.released_at
+
+        def connected_before_release(channel: Channel) -> bool:
+            if channel.connected_at is None or released_at is None:
+                return False
+            connected_at = channel.connected_at
+            if connected_at.tzinfo is None or released_at.tzinfo is None:
+                return connected_at.replace(tzinfo=None) <= released_at.replace(tzinfo=None)
+            return connected_at <= released_at
+
+        channels = [channel for channel in available_channels
+                    if include_late_channels or channel.kind == 'inapp'
+                    or connected_before_release(channel)]
     if not payment.group_ids:
         return channels
-    groups = db.scalars(select(AudienceGroup).where(AudienceGroup.id.in_(payment.group_ids)))
-    selected = {cid for group in groups for cid in group.channel_ids}
+    groups = available_groups or {
+        group.id: group for group in db.scalars(select(AudienceGroup).where(AudienceGroup.id.in_(payment.group_ids)))
+    }
+    selected = {cid for group_id in payment.group_ids if group_id in groups for cid in groups[group_id].channel_ids}
     return [channel for channel in channels if channel.id in selected or channel.kind == 'inapp']
 
 
-def queue_event(db: Session, occurrence: Occurrence, event: str, include_late_channels: bool = False):
+def queue_event(db: Session, occurrence: Occurrence, event: str, include_late_channels: bool = False,
+                available_channels: list[Channel] | None = None,
+                available_groups: dict[str, AudienceGroup] | None = None):
     payment = db.get(RecurringPayment, occurrence.recurring_id)
     if occurrence.released_at is None and not event.startswith('test:'):
         occurrence.released_at = utcnow()
         db.flush()
     insert_unique(db, Delivery, [dict(occurrence_id=occurrence.id, channel_id=channel.id, event=event)
-                   for channel in target_channels(db, payment, occurrence, include_late_channels)], ['occurrence_id', 'channel_id', 'event'])
+                   for channel in target_channels(db, payment, occurrence, include_late_channels,
+                                                  available_channels, available_groups)],
+                  ['occurrence_id', 'channel_id', 'event'])
     db.flush()
 
 
@@ -126,6 +149,8 @@ def create_one_time_payment(db: Session, data, actor: str):
 
 
 def prepare_reminders(db: Session):
+    channels = list(db.scalars(select(Channel).where(Channel.active.is_(True))))
+    groups = {group.id: group for group in db.scalars(select(AudienceGroup))}
     for payment in db.scalars(select(RecurringPayment).where(RecurringPayment.active.is_(True))):
         generate_occurrences(db, payment)
     rows = db.scalars(select(Occurrence).join(RecurringPayment).where(
@@ -134,7 +159,7 @@ def prepare_reminders(db: Session):
         Occurrence.due_date <= today() + timedelta(days=3),
     ))
     for occurrence in rows:
-        queue_event(db, occurrence, 'reminder')
+        queue_event(db, occurrence, 'reminder', available_channels=channels, available_groups=groups)
 
 
 def occurrence_out(row: Occurrence, payment_type: str = 'recurring', description: str = ''):

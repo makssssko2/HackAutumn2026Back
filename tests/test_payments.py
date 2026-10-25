@@ -10,7 +10,7 @@ from app.config import today
 from app.models import AudienceGroup, AuthSession, Channel, Delivery, Occurrence, Receipt, RecurringPayment, User, utcnow
 from app.security import token_hash
 from app.schemas import RecurringIn
-from app.services import confirm_occurrence, create_payment, generate_occurrences, period_date, prepare_reminders
+from app.modules.payments.service import confirm_occurrence, create_payment, generate_occurrences, period_date, prepare_reminders
 
 
 def create(client, **changes):
@@ -526,7 +526,7 @@ def test_api_documentation_contains_required_routes(admin):
 
 
 def test_worker_skips_paid_and_sends_internal_once(admin, db_factory, monkeypatch):
-    import app.notifications as notifications
+    import app.modules.notifications.service as notifications
     monkeypatch.setattr(notifications, 'SessionLocal', db_factory)
     payment = create(admin)
     row = first(admin, payment)
@@ -539,7 +539,7 @@ def test_worker_skips_paid_and_sends_internal_once(admin, db_factory, monkeypatc
 
 def test_telegram_api_does_not_expose_bot_token(monkeypatch):
     import httpx
-    import app.notifications as notifications
+    import app.modules.notifications.service as notifications
     monkeypatch.setattr(notifications.settings, 'telegram_bot_token', 'private-token')
     class FakeClient:
         def __enter__(self): return self
@@ -552,7 +552,7 @@ def test_telegram_api_does_not_expose_bot_token(monkeypatch):
 
 
 def test_admin_journal_exposes_live_invoice_and_receipt(admin, db_factory, monkeypatch):
-    import app.notifications as notifications
+    import app.modules.notifications.service as notifications
     monkeypatch.setattr(notifications, 'SessionLocal', db_factory)
     row = first(admin, create(admin))
     notifications.process_deliveries()

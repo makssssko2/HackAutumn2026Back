@@ -8,10 +8,10 @@ from sqlalchemy.orm import Session
 from app.core.config import today
 from app.core.db import get_db
 from app.core.security import current_user
-from app.domain.services import generate_occurrences, summarize
+from app.modules.payments.service import generate_occurrences, summarize
 from app.models import Occurrence, User
-from app.repositories.occurrences import list_occurrences
-from app.repositories.payments import list_active_payments
+from app.modules.invoices.repository import list_occurrences
+from app.modules.payments.repository import list_active_payments
 
 router = APIRouter(prefix='/api/v1/payments', tags=['Reports'])
 

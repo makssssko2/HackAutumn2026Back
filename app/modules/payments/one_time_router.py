@@ -3,10 +3,10 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.security import admin_user
-from app.domain.formatters import public
-from app.domain.services import cancel_one_time_payment, create_one_time_payment
+from app.shared.formatters import public
+from app.modules.payments.service import cancel_one_time_payment, create_one_time_payment
 from app.models import RecurringPayment, User
-from app.repositories.base import get_or_404
+from app.shared.repository import get_or_404
 from app.schemas import OneTimeIn
 
 router = APIRouter(prefix='/api/v1/one-time-payments', tags=['One-time Payments'])
