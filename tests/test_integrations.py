@@ -250,7 +250,7 @@ def test_external_channel_delivery_creates_secure_action(admin, db_factory, monk
         delivery = Delivery(occurrence_id=occurrence.id, channel_id=channel.id, event='created')
         db.add(delivery)
         db.commit()
-        from app.notifications import send_delivery
+        from app.modules.notifications.service import send_delivery
         FakeClient.responses = [FakeResponse({'id': 'post-1'})]
         monkeypatch.setattr('app.integrations.mattermost.httpx.Client', FakeClient)
         assert send_delivery(db, delivery, channel, occurrence) == 'post-1'
@@ -292,7 +292,7 @@ def test_bitrix24_delivery_sends_invoice_and_receipt(db_factory, monkeypatch):
         monkeypatch.setattr('app.integrations.bitrix24.httpx.Client', FakeClient)
 
         # When the worker dispatches the state update.
-        from app.notifications import send_delivery
+        from app.modules.notifications.service import send_delivery
         assert send_delivery(db, delivery, channel, occurrence) == 'message-1'
 
         # Then it uses native message delivery followed by the native file upload.

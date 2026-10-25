@@ -7,14 +7,14 @@ from sqlalchemy import func
 from app.core.config import today
 from app.core.db import get_db
 from app.core.security import admin_user
-from app.domain.formatters import public
-from app.domain.services import audit, occurrence_out, queue_event
+from app.shared.formatters import public
+from app.modules.payments.service import audit, occurrence_out, queue_event
 from app.models import Delivery, Occurrence, User, utcnow
-from app.repositories.base import get_or_404
-from app.repositories.deliveries import get_receipt_map, list_deliveries_with_context, list_reminder_deliveries
-from app.repositories.deliveries import deliveries_query
-from app.repositories.pagination import PageRequest, fetch_page
-from app.repositories.occurrences import get_occurrence_payment
+from app.shared.repository import get_or_404
+from app.modules.notifications.repository import get_receipt_map, list_reminder_deliveries
+from app.modules.notifications.repository import deliveries_query
+from app.shared.pagination import PageRequest, fetch_page
+from app.modules.invoices.repository import get_occurrence_payment
 
 router = APIRouter(prefix='/api/v1/notifications', tags=['Notifications'])
 

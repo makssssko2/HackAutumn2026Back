@@ -17,7 +17,7 @@ from sqlalchemy import select
 from app.config import today
 from app.models import AuditLog, Channel, ChannelLink, Delivery, Occurrence, Receipt, User, utcnow
 from app.schemas import RecurringIn
-from app.services import create_payment
+from app.modules.payments.service import create_payment
 
 
 def sample(db):
@@ -30,7 +30,7 @@ def message(chat_id=-100123, text=None):
 
 
 def test_webhook_signature_and_stable_event_id(db_factory, monkeypatch):
-    import app.notifications as notifications
+    import app.modules.notifications.service as notifications
     captured = {}
     class Client:
         def __enter__(self): return self
@@ -56,7 +56,7 @@ def test_webhook_signature_and_stable_event_id(db_factory, monkeypatch):
 
 
 def test_webhook_roundtrip_and_retry_through_worker(admin, db_factory, monkeypatch):
-    import app.notifications as notifications
+    import app.modules.notifications.service as notifications
     monkeypatch.setattr(notifications, 'SessionLocal', db_factory)
     monkeypatch.setattr(notifications.settings, 'allow_private_webhooks', True)
     received = []
@@ -100,7 +100,7 @@ def test_webhook_roundtrip_and_retry_through_worker(admin, db_factory, monkeypat
 
 @pytest.mark.parametrize('implicit_ssl', [False, True])
 def test_smtp_adapter_uses_configured_recipient_and_message_id(db_factory, monkeypatch, implicit_ssl):
-    import app.notifications as notifications
+    import app.modules.notifications.service as notifications
     captured = {}
     class SMTP:
         def __enter__(self): return self
@@ -139,7 +139,7 @@ def test_smtp_adapter_uses_configured_recipient_and_message_id(db_factory, monke
 
 
 def test_network_timeout_requires_review_not_blind_retry(db_factory, monkeypatch):
-    import app.notifications as notifications
+    import app.modules.notifications.service as notifications
     monkeypatch.setattr(notifications, 'SessionLocal', db_factory)
     with db_factory() as db:
         row = sample(db)
@@ -156,7 +156,7 @@ def test_network_timeout_requires_review_not_blind_retry(db_factory, monkeypatch
 
 
 def test_smtp_timeout_requires_review_not_retry(db_factory, monkeypatch):
-    import app.notifications as notifications
+    import app.modules.notifications.service as notifications
     monkeypatch.setattr(notifications, 'SessionLocal', db_factory)
     with db_factory() as db:
         row = sample(db)
@@ -179,7 +179,7 @@ def test_smtp_timeout_requires_review_not_retry(db_factory, monkeypatch):
 
 
 def test_bot_rejects_other_chat_and_confirms_once(db_factory, monkeypatch):
-    import app.telegram_bot as telegram
+    import app.workers.telegram_bot as telegram
     monkeypatch.setattr(telegram, 'SessionLocal', db_factory)
     with db_factory() as db:
         row = sample(db)
@@ -200,7 +200,7 @@ def test_bot_rejects_other_chat_and_confirms_once(db_factory, monkeypatch):
 
 
 def test_connect_code_is_single_use_and_requires_group_admin(db_factory, monkeypatch):
-    import app.telegram_bot as telegram
+    import app.workers.telegram_bot as telegram
     monkeypatch.setattr(telegram, 'SessionLocal', db_factory)
     answer = AsyncMock()
     monkeypatch.setattr(Message, 'answer', answer)
@@ -223,7 +223,7 @@ def test_connect_code_is_single_use_and_requires_group_admin(db_factory, monkeyp
 
 
 def test_startgroup_links_existing_bot_without_web_account(db_factory, monkeypatch):
-    import app.telegram_bot as telegram
+    import app.workers.telegram_bot as telegram
     monkeypatch.setattr(telegram, 'SessionLocal', db_factory)
     monkeypatch.setattr(Message, 'answer', AsyncMock())
     with db_factory() as db:
@@ -245,7 +245,7 @@ def test_startgroup_links_existing_bot_without_web_account(db_factory, monkeypat
 
 
 def test_startgroup_rejects_private_chat_and_expired_code(db_factory, monkeypatch):
-    import app.telegram_bot as telegram
+    import app.workers.telegram_bot as telegram
     monkeypatch.setattr(telegram, 'SessionLocal', db_factory)
     monkeypatch.setattr(Message, 'answer', AsyncMock())
     with db_factory() as db:
@@ -290,7 +290,7 @@ def test_admin_configuration_revokes_previous_admin(db_factory, monkeypatch):
 
 
 def test_telegram_partial_state_update_can_be_retried(db_factory, monkeypatch):
-    import app.notifications as notifications
+    import app.modules.notifications.service as notifications
     monkeypatch.setattr(notifications.settings, 'telegram_bot_token', 'test-token')
     updated = set()
     fail_once = [True]
@@ -324,7 +324,7 @@ def test_telegram_partial_state_update_can_be_retried(db_factory, monkeypatch):
 
 
 def test_connect_code_can_only_bind_one_chat_concurrently(db_factory, monkeypatch):
-    import app.telegram_bot as telegram
+    import app.workers.telegram_bot as telegram
     monkeypatch.setattr(telegram, 'SessionLocal', db_factory)
     monkeypatch.setattr(Message, 'answer', AsyncMock())
     with db_factory() as db:

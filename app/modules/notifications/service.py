@@ -15,13 +15,13 @@ from sqlalchemy import select, update
 
 from app.core.config import settings
 from app.core.db import SessionLocal
-from app.domain.services import occurrence_out, prepare_reminders
-from app.domain.invoice_views import invoice_view_url
+from app.modules.payments.service import occurrence_out, prepare_reminders
+from app.modules.invoices.service import invoice_view_url
 from app.integrations.actions import create_actions, handle_callback
 from app.integrations.base import IntegrationError, get_adapter
 from app.models import BotAction, Channel, Delivery, IntegrationConnection, IntegrationInbox, Occurrence, Receipt, RecurringPayment, utcnow
 from app.presentation.message_templates import email_html, telegram_message
-from app.payment_access import email_payment_url
+from app.modules.invoices.payment_access import email_payment_url
 
 logger = logging.getLogger(__name__)
 
