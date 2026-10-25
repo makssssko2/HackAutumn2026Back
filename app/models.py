@@ -15,5 +15,6 @@ from app.core.db import Base
 from app.shared.model_utils import uid, utcnow
 
 import app.modules.b2b.models  # Register the complete ORM metadata for legacy callers.
+import app.modules.oidc.models
 
 __all__ = ['User', 'AuthSession', 'RecurringPayment', 'Occurrence', 'PaymentLink', 'InvoiceViewLink', 'Receipt', 'Attachment', 'Channel', 'ChannelLink', 'AudienceGroup', 'Delivery', 'AuditLog', 'BotAction', 'IntegrationConnection', 'IntegrationInbox', 'Base', 'uid', 'utcnow']

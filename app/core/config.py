@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     data_dir: Path = Path('data')
     public_app_url: str = 'http://localhost:8000'
     integrations_encryption_key: str = ''
+    oidc_allowed_origins: str = ''
     b2b_enabled: bool = False
     b2b_api_key_pepper: str = ''
     b2b_document_max_bytes: int = 10 * 1024 * 1024

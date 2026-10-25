@@ -6,6 +6,7 @@ psycopg[binary]==3.3.6
 pydantic-settings==2.16.1
 python-multipart==0.0.32
 httpx==0.28.1
+Authlib==1.9.1
 cryptography==49.0.0
 aiogram==3.31.0
 tzdata==2026.5

@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "invoice-keeper": {
+      "command": "npx",
+      "args": ["--yes", "invoice-keeper-mcp@1.0.0"],
+      "env": {
+        "IK_MCP_API_URL": "https://invoice.example.com",
+        "IK_MCP_LOGIN": "employee-login",
+        "IK_MCP_PASSWORD": "employee-password",
+        "IK_MCP_READ_ONLY": "true"
+      }
+    }
+  }
+}

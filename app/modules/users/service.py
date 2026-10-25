@@ -24,6 +24,8 @@ async def change_user(user_id: str, data: UserPatch, user: User, db: Session):
     row = (await get_or_404(db, User, user_id))
     if row.role == 'admin':
         raise HTTPException(403, 'Администратор управляется только через .env')
+    if row.auth_source != 'local' and 'password' in data.model_fields_set:
+        raise HTTPException(403, 'Пароль управляется корпоративным провайдером')
     for key, value in data.model_dump(exclude_unset=True).items():
         if value is None:
             raise HTTPException(422, 'Значение не может быть пустым')

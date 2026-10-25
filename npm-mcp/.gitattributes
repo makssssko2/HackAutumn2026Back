@@ -1,0 +1,2 @@
+# Preserve the published business contract bytes, including its original CRLF.
+src/contract.json -text

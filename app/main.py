@@ -19,6 +19,7 @@ from app.modules.notifications import router as notifications
 from app.modules.payments import one_time_router, reports_router, router as payments
 from app.modules.receipts import router as receipts
 from app.modules.users import router as users
+from app.modules.oidc import router as oidc
 from app.modules.auth.router import login_attempts  # re-exported for tests and legacy imports
 from app.modules.auth import system_router as system
 from app.modules.notifications.service import telegram_call  # re-exported for tests
@@ -59,7 +60,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,
     allow_credentials=True,
-    allow_methods=['GET', 'POST', 'PATCH', 'DELETE'],
+    allow_methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
     allow_headers=['Content-Type'],
 )
 
@@ -68,7 +69,7 @@ b2b_rate_limiter = SlidingWindowLimiter(settings.b2b_rate_limit_per_minute, 60, 
 
 @app.exception_handler(RequestValidationError)
 async def validation_error(request: Request, exc: RequestValidationError):
-    if request.url.path == '/api/v1/auth/password':
+    if request.url.path in ('/api/v1/auth/password', '/api/v1/oidc/provider'):
         # Validation feedback must not echo submitted passwords.
         return JSONResponse(status_code=422, content={'detail': [
             {key: error[key] for key in ('loc', 'msg', 'type')}
@@ -91,7 +92,7 @@ async def protect_origins(request: Request, call_next):
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['Cache-Control'] = 'no-store'
     response.headers['Referrer-Policy'] = (
-        'no-referrer' if '/public/payments/' in request.url.path or '/public/invoices/' in request.url.path else 'same-origin'
+        'no-referrer' if '/public/payments/' in request.url.path or '/public/invoices/' in request.url.path or '/oidc/' in request.url.path else 'same-origin'
     )
     if request.url.path.startswith('/api/v1/public/invoices/'):
         response.headers['X-Robots-Tag'] = 'noindex, nofollow'
@@ -102,6 +103,7 @@ app.include_router(payment_access_router)
 app.include_router(public_invoice_router)
 app.include_router(system.router)
 app.include_router(auth.router)
+app.include_router(oidc.router)
 app.include_router(users.router)
 app.include_router(payments.router)
 app.include_router(one_time_router.router)

@@ -15,8 +15,13 @@ async def current_user(request: Request, db: Session = Depends(get_db), token: s
     auth = (await db.get(AuthSession, token_hash(token))) if token else None
     if not auth or auth.expires_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
         raise HTTPException(401, 'Войдите в систему')
+    if auth.oidc_revision is not None:
+        from app.modules.oidc.models import OIDCProvider
+        provider = await db.get(OIDCProvider, 1)
+        if not provider or not provider.enabled or provider.revision != auth.oidc_revision:
+            raise HTTPException(401, 'Войдите в систему')
     user = (await db.get(User, auth.user_id))
-    if not user or not user.active:
+    if not user or not user.active or user.deleted:
         raise HTTPException(401, 'Учетная запись недоступна')
     return user
 

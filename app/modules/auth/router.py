@@ -15,11 +15,15 @@ from app.modules.users.schemas import ProfilePatch
 router = APIRouter(prefix='/api/v1/auth', tags=['Auth'])
 
 
+def set_session_cookie(response: Response, token: str, max_age: int = 604800):
+    response.set_cookie('ik_session', token, httponly=True, secure=settings.cookie_secure,
+                        samesite='lax', max_age=max_age, path='/api')
+
+
 @router.post('/login')
 async def login(data: LoginIn, request: Request, response: Response, db: Session = Depends(get_db)):
     user, token = await operations.login(data, request.client.host if request.client else 'local', db)
-    response.set_cookie('ik_session', token, httponly=True, secure=settings.cookie_secure,
-                        samesite='lax', max_age=604800, path='/api')
+    set_session_cookie(response, token)
     return user_out(user)
 
 

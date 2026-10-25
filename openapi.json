@@ -396,6 +396,215 @@
         ]
       }
     },
+    "/api/v1/oidc/provider": {
+      "get": {
+        "tags": [
+          "OIDC"
+        ],
+        "summary": "Get Provider",
+        "operationId": "get_provider_api_v1_oidc_provider_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderOut"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "OIDC"
+        ],
+        "summary": "Put Provider",
+        "operationId": "put_provider_api_v1_oidc_provider_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/oidc/provider/test": {
+      "post": {
+        "tags": [
+          "OIDC"
+        ],
+        "summary": "Test Provider",
+        "operationId": "test_provider_api_v1_oidc_provider_test_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/oidc/public": {
+      "get": {
+        "tags": [
+          "OIDC"
+        ],
+        "summary": "Public Provider",
+        "operationId": "public_provider_api_v1_oidc_public_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/oidc/login": {
+      "get": {
+        "tags": [
+          "OIDC"
+        ],
+        "summary": "Login",
+        "operationId": "login_api_v1_oidc_login_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/oidc/callback": {
+      "get": {
+        "tags": [
+          "OIDC"
+        ],
+        "summary": "Callback",
+        "operationId": "callback_api_v1_oidc_callback_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/oidc/mcp/login": {
+      "get": {
+        "tags": [
+          "OIDC"
+        ],
+        "summary": "Mcp Login",
+        "operationId": "mcp_login_api_v1_oidc_mcp_login_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/oidc/mcp/exchange": {
+      "post": {
+        "tags": [
+          "OIDC"
+        ],
+        "summary": "Mcp Exchange",
+        "operationId": "mcp_exchange_api_v1_oidc_mcp_exchange_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HandoffIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/users": {
       "get": {
         "tags": [
@@ -3244,6 +3453,36 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
+      "HandoffIn": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9_-]{64}$",
+            "title": "Code"
+          },
+          "code_verifier": {
+            "type": "string",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._~-]{43,128}$",
+            "title": "Code Verifier"
+          },
+          "redirect_uri": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Redirect Uri"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code",
+          "code_verifier",
+          "redirect_uri"
+        ],
+        "title": "HandoffIn"
+      },
       "IntegrationConnectionIn": {
         "properties": {
           "provider": {
@@ -3553,6 +3792,144 @@
           "name"
         ],
         "title": "ProfilePatch"
+      },
+      "ProviderIn": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "discovery_url": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Discovery Url"
+          },
+          "client_id": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Client Id"
+          },
+          "client_secret": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4096,
+                "format": "password",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Secret"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "auto_provision": {
+            "type": "boolean",
+            "title": "Auto Provision"
+          },
+          "session_minutes": {
+            "type": "integer",
+            "maximum": 1440.0,
+            "minimum": 5.0,
+            "title": "Session Minutes"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Expected Revision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "discovery_url",
+          "client_id",
+          "enabled",
+          "auto_provision",
+          "session_minutes",
+          "expected_revision"
+        ],
+        "title": "ProviderIn"
+      },
+      "ProviderOut": {
+        "properties": {
+          "configured": {
+            "type": "boolean",
+            "title": "Configured"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "discovery_url": {
+            "type": "string",
+            "title": "Discovery Url"
+          },
+          "client_id": {
+            "type": "string",
+            "title": "Client Id"
+          },
+          "has_client_secret": {
+            "type": "boolean",
+            "title": "Has Client Secret"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "auto_provision": {
+            "type": "boolean",
+            "title": "Auto Provision"
+          },
+          "session_minutes": {
+            "type": "integer",
+            "title": "Session Minutes"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "redirect_uri": {
+            "type": "string",
+            "title": "Redirect Uri"
+          },
+          "encryption_ready": {
+            "type": "boolean",
+            "title": "Encryption Ready"
+          },
+          "allowed_origins": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allowed Origins"
+          }
+        },
+        "type": "object",
+        "required": [
+          "configured",
+          "name",
+          "discovery_url",
+          "client_id",
+          "has_client_secret",
+          "enabled",
+          "auto_provision",
+          "session_minutes",
+          "revision",
+          "redirect_uri",
+          "encryption_ready",
+          "allowed_origins"
+        ],
+        "title": "ProviderOut"
       },
       "PublicInvoiceView": {
         "properties": {

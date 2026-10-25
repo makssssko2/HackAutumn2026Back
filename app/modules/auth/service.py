@@ -38,7 +38,7 @@ async def login(data: LoginIn, ip: str, db: Session):
     if len(login_attempts[ip]) >= 10:
         raise HTTPException(429, 'Слишком много попыток. Попробуйте через минуту')
     user = (await get_user_by_login(db, data.login))
-    if not user or not user.active or not (await verify_password(data.password, user.password_hash)):
+    if not user or not user.active or user.deleted or user.auth_source != 'local' or not (await verify_password(data.password, user.password_hash)):
         login_attempts[ip].append(now)
         audit(db, 'anonymous', 'auth.failed', details_login=data.login)
         (await db.commit())
@@ -59,6 +59,8 @@ async def update_me(data: ProfilePatch, user: User, db: Session):
 
 
 async def change_password(data: PasswordChange, user: User, db: Session):
+    if user.auth_source != 'local':
+        raise HTTPException(403, 'Пароль управляется корпоративным провайдером')
     if not settings.password_change_enabled:
         raise HTTPException(403, 'Смена пароля отключена администратором')
     key = f'password:{user.id}'
