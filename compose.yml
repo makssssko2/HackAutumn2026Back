@@ -38,7 +38,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://invoice_keeper:${POSTGRES_PASSWORD:-local-development-only}@db:5432/invoice_keeper
-    command: ["python", "-m", "app.worker"]
+    command: ["python", "-m", "app.workers.worker"]
     volumes:
       - attachments:/app/data
     depends_on:
@@ -59,7 +59,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://invoice_keeper:${POSTGRES_PASSWORD:-local-development-only}@db:5432/invoice_keeper
-    command: ["python", "-m", "app.bitrix24_runner"]
+    command: ["python", "-m", "app.workers.bitrix24_runner"]
     depends_on:
       api:
         condition: service_healthy
@@ -70,7 +70,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://invoice_keeper:${POSTGRES_PASSWORD:-local-development-only}@db:5432/invoice_keeper
-    command: ["python", "-m", "app.telegram_bot"]
+    command: ["python", "-m", "app.workers.telegram_bot"]
     depends_on:
       api:
         condition: service_healthy

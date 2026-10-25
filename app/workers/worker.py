@@ -3,8 +3,8 @@ import time
 
 from app.core.bootstrap import bootstrap
 from app.core.config import settings
-from app.incoming_invoice_notifications import tick as b2b_tick
-from app.notifications import tick
+from app.modules.b2b.notifications import tick as b2b_tick
+from app.modules.notifications.service import tick
 
 
 def main():

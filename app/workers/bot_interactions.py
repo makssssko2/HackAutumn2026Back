@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy import delete, select
 
 from app.core.config import today
-from app.domain.services import confirm_occurrence
+from app.modules.payments.service import confirm_occurrence
 from app.models import BotAction, Receipt, RecurringPayment, utcnow
 from app.presentation.message_templates import amount_label
 from app.presentation.receipts import receipt_html

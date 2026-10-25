@@ -9,10 +9,10 @@ from sqlalchemy import delete, select
 from app.core.bootstrap import bootstrap
 from app.core.config import settings
 from app.core.db import SessionLocal
-from app.domain.services import audit, confirm_occurrence
+from app.modules.payments.service import audit, confirm_occurrence
 from app.models import Channel, ChannelLink, Delivery, Occurrence, Receipt, RecurringPayment, utcnow
 from app.presentation.receipts import receipt_html
-from app.bot_interactions import open_action, handle_action as handle_date_action
+from app.workers.bot_interactions import open_action, handle_action as handle_date_action
 
 dispatcher = Dispatcher()
 
