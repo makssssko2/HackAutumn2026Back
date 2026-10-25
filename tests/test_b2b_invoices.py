@@ -2,11 +2,11 @@ from datetime import date
 
 from fastapi.testclient import TestClient
 
-from app.api import b2b, incoming_invoices
+from app.modules.b2b import router as b2b, admin_router as incoming_invoices
 from app.core.config import settings
 from app.core.partner_security import digest_partner_api_key_secret, generate_partner_api_key, parse_partner_api_key
 from app.main import app
-from app.models_b2b import (BusinessPartner, BuyerOrganization, PartnerApiKey,
+from app.modules.b2b.models import (BusinessPartner, BuyerOrganization, PartnerApiKey,
                             PartnerBankAccount, PartnerBuyerAccess)
 
 

@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import utcnow
-from app.models_b2b import PartnerIdempotencyRecord
+from app.modules.b2b.models import PartnerIdempotencyRecord
 
 
 def fingerprint(method: str, path: str, body: dict) -> str:

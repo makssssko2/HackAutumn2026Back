@@ -7,7 +7,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from app.models import utcnow
-from app.models_b2b import (BusinessPartner, BuyerOrganization, IncomingInvoice,
+from app.modules.b2b.models import (BusinessPartner, BuyerOrganization, IncomingInvoice,
                              IncomingInvoiceDocument, IncomingInvoiceHistory,
                             IncomingInvoiceOutbox, IncomingInvoicePayment,
                             PartnerBankAccount)
@@ -60,7 +60,7 @@ def validate_create_references(db: Session, partner_id: str, buyer_id: str, acco
     account = db.scalar(select(PartnerBankAccount).where(PartnerBankAccount.id == account_id, PartnerBankAccount.partner_id == partner_id, PartnerBankAccount.active.is_(True), PartnerBankAccount.verified.is_(True)))
     if buyer is None or not buyer.active or account is None:
         raise HTTPException(422, 'Buyer access or verified bank account is unavailable')
-    from app.models_b2b import PartnerBuyerAccess
+    from app.modules.b2b.models import PartnerBuyerAccess
     access = db.scalar(select(PartnerBuyerAccess.id).where(PartnerBuyerAccess.partner_id == partner_id, PartnerBuyerAccess.buyer_id == buyer_id))
     if access is None:
         raise HTTPException(422, 'Buyer access is unavailable')

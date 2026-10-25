@@ -11,11 +11,11 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from app.b2b_documents import document_path
+from app.modules.b2b.documents import document_path
 from app.core.config import settings
 from app.core.db import SessionLocal
 from app.models import utcnow
-from app.models_b2b import (IncomingInvoice, IncomingInvoiceDocument,
+from app.modules.b2b.models import (IncomingInvoice, IncomingInvoiceDocument,
                             IncomingInvoiceNotification,
                             IncomingInvoiceNotificationRecipient,
                             IncomingInvoiceOutbox)

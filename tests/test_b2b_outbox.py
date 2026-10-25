@@ -3,8 +3,8 @@ from decimal import Decimal
 
 from sqlalchemy import select
 
-from app.domain.incoming_invoices import enqueue_invoice_event, submit_invoice
-from app.models_b2b import (BusinessPartner, BuyerOrganization, IncomingInvoice,
+from app.modules.b2b.service import enqueue_invoice_event, submit_invoice
+from app.modules.b2b.models import (BusinessPartner, BuyerOrganization, IncomingInvoice,
                             IncomingInvoiceDocument, IncomingInvoiceNotification,
                             IncomingInvoiceNotificationRecipient,
                             IncomingInvoiceOutbox, PartnerBankAccount,
@@ -50,7 +50,7 @@ def test_submit_creates_one_sanitized_outbox_event_atomically(db_factory):
 
 
 def test_worker_routes_only_to_active_explicit_buyer_recipients(db_factory, monkeypatch):
-    import app.incoming_invoice_notifications as notifications
+    import app.modules.b2b.notifications as notifications
 
     # Given: an event, active/inactive explicit recipients, and a legacy channel.
     monkeypatch.setattr(notifications, 'SessionLocal', db_factory)
@@ -88,7 +88,7 @@ def test_worker_routes_only_to_active_explicit_buyer_recipients(db_factory, monk
 
 
 def test_worker_marks_timeout_uncertain_and_known_error_retries(db_factory, monkeypatch):
-    import app.incoming_invoice_notifications as notifications
+    import app.modules.b2b.notifications as notifications
 
     # Given: a due notification created from an already processed event.
     monkeypatch.setattr(notifications, 'SessionLocal', db_factory)
@@ -131,7 +131,7 @@ def test_worker_marks_timeout_uncertain_and_known_error_retries(db_factory, monk
 
 
 def test_worker_keeps_test_and_live_recipients_isolated(db_factory, monkeypatch):
-    import app.incoming_invoice_notifications as notifications
+    import app.modules.b2b.notifications as notifications
 
     # Given: a test invoice and explicit recipient configuration for both environments.
     monkeypatch.setattr(notifications, 'SessionLocal', db_factory)

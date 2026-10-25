@@ -4,17 +4,17 @@ from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.b2b_documents import document_path, save_upload
+from app.modules.b2b.documents import document_path, save_upload
 from app.core.config import settings
 from app.core.db import get_db
 from app.core.partner_security import PartnerPrincipal, require_partner_scope
-from app.domain.incoming_invoices import (record_history, require_revision, submit_invoice,
+from app.modules.b2b.service import (record_history, require_revision, submit_invoice,
                                           transition_invoice, validate_create_references)
-from app.models_b2b import (BusinessPartner, IncomingInvoice, IncomingInvoiceDocument,
+from app.modules.b2b.models import (BusinessPartner, IncomingInvoice, IncomingInvoiceDocument,
                             PartnerBankAccount, PartnerBuyerAccess, BuyerOrganization)
-from app.repositories.b2b_idempotency import fingerprint, replay_or_conflict, save_response
-from app.repositories.incoming_invoices import invoice_history, partner_document_or_404, partner_invoice_or_404
-from app.schemas_b2b import InvoiceIn, InvoicePatch, RevisionIn
+from app.modules.b2b.idempotency import fingerprint, replay_or_conflict, save_response
+from app.modules.b2b.repository import invoice_history, partner_document_or_404, partner_invoice_or_404
+from app.modules.b2b.schemas import InvoiceIn, InvoicePatch, RevisionIn
 
 router = APIRouter(prefix='/api/b2b/v1', tags=['B2B Incoming Invoices'])
 
@@ -92,7 +92,7 @@ def patch_invoice(invoice_id: str, data: InvoicePatch, idempotency_key: str | No
     request_fingerprint, replay = cached_response(db, principal, key, 'PATCH', f'/invoices/{invoice_id}', body)
     if replay:
         return replay
-    invoice = partner_invoice_or_404(db, invoice_id, principal.partner_id, principal.environment)
+    invoice = partner_invoice_or_404(db, invoice_id, principal.partner_id, principal.environment, for_update=True)
     require_revision(invoice, data.expected_revision)
     if invoice.review_status != 'draft':
         raise HTTPException(409, 'invalid_transition')
@@ -121,7 +121,7 @@ async def upload_document(invoice_id: str, expected_revision: int = Form(gt=0), 
     request_fingerprint, replay = cached_response(db, principal, key, 'POST', f'/invoices/{invoice_id}/documents', body)
     if replay:
         return replay
-    invoice = partner_invoice_or_404(db, invoice_id, principal.partner_id, principal.environment)
+    invoice = partner_invoice_or_404(db, invoice_id, principal.partner_id, principal.environment, for_update=True)
     require_revision(invoice, expected_revision)
     if invoice.review_status != 'draft':
         raise HTTPException(409, 'invalid_transition')
@@ -157,7 +157,7 @@ def delete_document(invoice_id: str, document_id: str, data: RevisionIn, idempot
     request_fingerprint, replay = cached_response(db, principal, key, 'DELETE', f'/invoices/{invoice_id}/documents/{document_id}', body)
     if replay:
         return replay
-    invoice = partner_invoice_or_404(db, invoice_id, principal.partner_id, principal.environment)
+    invoice = partner_invoice_or_404(db, invoice_id, principal.partner_id, principal.environment, for_update=True)
     require_revision(invoice, data.expected_revision)
     if invoice.review_status != 'draft':
         raise HTTPException(409, 'invalid_transition')
@@ -188,7 +188,7 @@ def _partner_transition(db: Session, principal: PartnerPrincipal, invoice_id: st
     request_fingerprint, replay = cached_response(db, principal, key, 'POST', f'/invoices/{invoice_id}/{action}', body)
     if replay:
         return replay
-    invoice = partner_invoice_or_404(db, invoice_id, principal.partner_id, principal.environment)
+    invoice = partner_invoice_or_404(db, invoice_id, principal.partner_id, principal.environment, for_update=True)
     if action == 'submit':
         submit_invoice(db, invoice, data.expected_revision, principal.partner_id)
     else:

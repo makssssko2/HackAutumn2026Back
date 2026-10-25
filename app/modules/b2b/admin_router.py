@@ -3,20 +3,20 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.b2b import document_out, invoice_out
-from app.b2b_documents import document_path
+from app.modules.b2b.router import document_out, invoice_out
+from app.modules.b2b.documents import document_path
 from app.core.db import get_db
 from app.core.partner_security import digest_partner_api_key_secret, generate_partner_api_key, parse_partner_api_key
 from app.core.config import settings
 from app.core.security import admin_user
-from app.domain.incoming_invoices import record_payment, reverse_payment, transition_invoice
-from app.domain.services import audit
+from app.modules.b2b.service import record_payment, reverse_payment, transition_invoice
+from app.modules.payments.service import audit
 from app.models import User, utcnow
-from app.models_b2b import (BusinessPartner, BuyerOrganization, IncomingInvoice,
+from app.modules.b2b.models import (BusinessPartner, BuyerOrganization, IncomingInvoice,
                              IncomingInvoiceDocument, PartnerApiKey, PartnerBankAccount,
                              PartnerBuyerAccess, IncomingInvoiceNotificationRecipient)
-from app.repositories.incoming_invoices import invoice_history, invoice_or_404, partner_document_or_404
-from app.schemas_b2b import (AccessIn, BankAccountIn, BuyerIn, KeyIssueIn,
+from app.modules.b2b.repository import invoice_history, invoice_or_404, partner_document_or_404
+from app.modules.b2b.schemas import (AccessIn, BankAccountIn, BuyerIn, KeyIssueIn,
                              NotificationRecipientIn, PartnerIn, PaymentIn, RevisionIn)
 
 router = APIRouter(prefix='/api/v1/incoming-invoices', tags=['Incoming Invoices'])
@@ -50,7 +50,7 @@ def registry_download(invoice_id: str, document_id: str, user: User = Depends(ad
 
 
 def decision(invoice_id: str, data: RevisionIn, action: str, user: User, db: Session):
-    invoice = invoice_or_404(db, invoice_id)
+    invoice = invoice_or_404(db, invoice_id, for_update=True)
     transition_invoice(db, invoice, data.expected_revision, action, 'admin', user.id, data.reason)
     audit(db, user.login, f'incoming_invoice.{action}', invoice.id)
     db.commit()
@@ -74,7 +74,7 @@ def cancel(invoice_id: str, data: RevisionIn, user: User = Depends(admin_user), 
 
 @router.post('/{invoice_id}/record-payment')
 def add_payment(invoice_id: str, data: PaymentIn, user: User = Depends(admin_user), db: Session = Depends(get_db)):
-    invoice = invoice_or_404(db, invoice_id)
+    invoice = invoice_or_404(db, invoice_id, for_update=True)
     record_payment(db, invoice, data.expected_revision, data.amount, data.paid_at, data.reference, user.id)
     audit(db, user.login, 'incoming_invoice.payment_recorded', invoice.id)
     db.commit()
@@ -85,7 +85,7 @@ def add_payment(invoice_id: str, data: PaymentIn, user: User = Depends(admin_use
 def undo_payment(invoice_id: str, data: RevisionIn, user: User = Depends(admin_user), db: Session = Depends(get_db)):
     if not data.reason:
         raise HTTPException(422, 'reason is required')
-    invoice = invoice_or_404(db, invoice_id)
+    invoice = invoice_or_404(db, invoice_id, for_update=True)
     reverse_payment(db, invoice, data.expected_revision, data.reason, user.id)
     audit(db, user.login, 'incoming_invoice.payment_reversed', invoice.id)
     db.commit()
