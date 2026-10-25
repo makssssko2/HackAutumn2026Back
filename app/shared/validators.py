@@ -4,8 +4,8 @@ import re
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.notifications import validate_webhook
-from app.repositories.groups import all_channel_ids_exist
+from app.modules.notifications.service import validate_webhook
+from app.modules.groups.repository import all_channel_ids_exist
 
 
 def check_channel(data) -> None:
