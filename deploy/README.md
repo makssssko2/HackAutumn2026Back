@@ -34,6 +34,12 @@ The backend must be started first to create its shared Docker network. Only one
 bot polling process may run for the configured Telegram token. Stop the local
 bot/worker before enabling their VPS counterparts.
 
+On PostgreSQL, committed pending deliveries wake the worker immediately through
+`LISTEN/NOTIFY` (migration `0011`). This covers new invoices, payment-state
+updates, channel tests and manual retries. The database queue remains durable;
+`WORKER_INTERVAL_SECONDS` still controls periodic reminder scans and retries and
+provides a fallback if the listener disconnects. SQLite uses periodic checks.
+
 For a new demonstration database only, explicitly seed example expenses:
 
 ```sh
