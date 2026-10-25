@@ -1,142 +1,349 @@
-# Invoice Keeper — Back
+# Invoice Keeper — бэкенд
 
-Python API, scheduler, Telegram bot and durable payment history. This is an independent Git repository; the Vue application lives in the neighboring `Front` repository. All payments are demonstrations: no money moves and generated HTML receipts are explicitly non-fiscal.
+Сервер приложения для учета разовых и регулярных расходов команды: выставления счетов, напоминаний, контроля оплаты и планирования бюджета. Предоставляет REST API для веб-интерфейса, хранит историю операций, формирует демонстрационные чеки и доставляет уведомления во внешние каналы.
 
-## Quick start with Docker
+**Оплата в проекте демонстрационная.** Подтверждение меняет состояние счета и создает демонстрационный HTML-чек. Реальные деньги не списываются, эквайринг не подключен, чек не является фискальным документом.
 
-```powershell
-Copy-Item .env.example .env
-docker compose up -d --build
-docker compose exec api python -m app.seed
+Этот репозиторий содержит API на Python, базу данных, фоновые процессы и интеграции. Клиентская часть на Vue находится в отдельном репозитории `Front`.
+
+- [Веб-приложение](https://aezainvoice.xxxmgxxx.com).
+- [Репозиторий сервера](https://github.com/makssssko2/HackAutumn2026Back).
+- [Репозиторий фронтенда](https://github.com/makssssko2/HackAutumn2026Front).
+
+## Содержание
+
+- [Возможности сервера](#возможности-сервера)
+- [Роли и доступ](#роли-и-доступ)
+- [Правила учета счетов](#правила-учета-счетов)
+- [Интеграции и уведомления](#интеграции-и-уведомления)
+- [Публичные ссылки на счет](#публичные-ссылки-на-счет)
+- [B2B: входящие счета поставщиков](#b2b-входящие-счета-поставщиков)
+- [MCP: работа через ИИ-ассистента](#mcp-работа-через-ии-ассистента)
+- [Технологии и структура проекта](#технологии-и-структура-проекта)
+- [Локальный запуск](#локальный-запуск)
+- [Запуск в Docker](#запуск-в-docker)
+- [Настройки и взаимодействие с API](#настройки-и-взаимодействие-с-api)
+- [Проверки и спецификация](#проверки-и-спецификация)
+- [Порядок обновления и ограничения](#порядок-обновления-и-ограничения)
+
+## Возможности сервера
+
+### Счета, расписания и бюджет
+
+- Разовые счета и регулярные шаблоны с периодичностью раз в неделю, месяц, квартал или год.
+- Независимые счета на каждый период, поиск, фильтры, сортировка и серверная пагинация.
+- Состояния «К оплате», «Просрочен», «Оплачен» и «Отменен», отдельная фактическая дата оплаты и расчет задержки.
+- Демонстрационная оплата, исправление даты и снятие отметки с проверкой ревизии счета.
+- Отмена неоплаченного разового счета и остановка регулярного шаблона с сохранением истории.
+- Месячная сводка, календарь и годовой бюджет с прогнозными периодами. RUB, USD и EUR учитываются отдельно, без конвертации.
+- История действий, демонстрационные чеки, вложения и ссылки на материалы счета.
+
+Разовый платеж создается через `POST /api/v1/one-time-payments` и содержит ровно один период. Регулярный шаблон создает отдельный счет на каждую дату расписания. Оба варианта используют общие правила оплаты, доставки, документов и аудита.
+
+### Учетные записи и администрирование
+
+Сервер обеспечивает вход, выход, сессии, управление участниками и собственным профилем, группы рассылки, каналы, подключения мессенджеров, журнал доставки и аудит. Имя и пароль можно изменить в разделе «Мой профиль»; логин, роль и активация не входят в самостоятельное редактирование профиля.
+
+После успешной смены пароля завершаются все сессии пользователя, включая текущую. Пароли и их хеши не записываются в события аудита.
+
+### Документы и чеки
+
+Для обычных счетов поддерживаются PDF, PNG, JPEG и TXT размером до 10 МиБ. Для бинарных форматов проверяется сигнатура. Файлы хранятся вне публичной статики и выдаются через защищенные маршруты; для внешних ссылок разрешены HTTP и HTTPS.
+
+Снятие отметки об оплате аннулирует демонстрационный чек. Исправление даты аннулирует прежний чек и выпускает замену, если чек уже существовал. История сохраняется.
+
+## Роли и доступ
+
+- **Участник (`user`)** просматривает счета, расписания, календарь, бюджет, документы и чеки; подтверждает демонстрационную оплату, исправляет ее дату, снимает отметку и редактирует свой профиль.
+- **Администратор (`admin`)** дополнительно создает и отменяет платежи, останавливает шаблоны, управляет участниками, группами, каналами, подключениями, рассылками и аудитом.
+- **Получатель без учетной записи** работает с одним счетом через разрешенные действия в подключенном чате либо через выданную публичную ссылку.
+- **Поставщик B2B** использует отдельный API с Bearer-ключом и выданными ему правами.
+
+Вход доступен активным учетным записям. Сервер проверяет права независимо от интерфейса. Группы рассылки определяют получателей уведомлений, а не видимость счетов: личного разделения обычных счетов по владельцу нет. Встроенный журнал уведомлений общий и доступен администратору.
+
+## Правила учета счетов
+
+- Каждый период хранит снимок названия, описания, суммы и валюты. Долг за прошлый месяц не мешает появлению следующего счета.
+- Для месячной, квартальной и годовой периодичности сохраняется исходный день. Если такого дня нет, используется конец месяца; затем исходный день восстанавливается.
+- Срок и фактическая дата оплаты хранятся отдельно и проверяются в часовом поясе `APP_TIMEZONE`. Оплата в день срока своевременная. Прошедшую фактическую дату указать можно, будущую — нельзя.
+- Неоплаченная просрочка отличается от оплаты с задержкой. Исправление фактической даты пересчитывает задержку, сохраняя срок.
+- Суммы обрабатываются как точные значения `Decimal`/`Numeric`; валюты не смешиваются.
+- Операции оплаты проверяют текущую ревизию: при одновременных изменениях побеждает одна операция, устаревшая получает `409`. Перед повтором нужно перечитать счет.
+- Остановка шаблона прекращает новые периоды и напоминания, отменяет неоплаченные текущие и будущие периоды, сохраняя старые долги и историю.
+- Расчет бюджета может создавать прогнозные периоды в базе. Сам расчет не запускает их рассылку. Разовые платежи не создаются повторно при расчете бюджета, перезапуске или работе фоновых процессов.
+
+## Интеграции и уведомления
+
+### Получатели и надежность доставки
+
+По умолчанию уведомление получают все активные настроенные каналы. Администратор может выбрать именованные группы рассылки; совпадающие получатели объединяются без дублей. Название, описание, сумма, валюта и срок счета передаются в уведомления и демонстрационные чеки.
+
+Новый канал получает будущие выпуски с момента подключения; старые счета автоматически ему не рассылаются. Для Telegram момент подключения — успешная привязка чата. Прогнозный период бюджета становится доступен для доставки при выпуске, а не при создании прогноза.
+
+При создании платежа первый период отправляется сразу. Если срок наступает в ближайшие три дня, это уже напоминание. Далее worker выпускает напоминания по неоплаченным периодам в текущем трехдневном окне. После простоя он не рассылает все старые долги. Администратор может запросить пропущенное напоминание через `POST /api/v1/notifications/occurrences/{occurrence_id}/remind`.
+
+Очередь хранится в базе, задания захватываются атомарно. Обычные повторы и перезапуски не создают дубли одного события для счета и канала. Явные ошибки повторяются с увеличением интервала, до пяти попыток. Тайм-аут или прерывание отправки дают неопределенный результат **«Проверьте доставку»**: перед ручным повтором нужно проверить внешний канал. Telegram и SMTP не гарантируют доставку ровно один раз на стороне получателя.
+
+В PostgreSQL новые задания после фиксации транзакции будят worker через `LISTEN/NOTIFY`. `WORKER_INTERVAL_SECONDS` управляет периодическими проверками и служит резервным механизмом. SQLite использует периодические проверки.
+
+### Telegram
+
+1. Создайте бота через [BotFather](https://t.me/BotFather) командой `/newbot`.
+2. Запишите токен в серверный `.env`: `TELEGRAM_BOT_TOKEN=ваш_токен`.
+3. Из каталога сервера запустите процессы с обновленным окружением:
+
+   ```powershell
+   docker compose --profile telegram up -d --build --force-recreate api worker bot
+   ```
+
+4. В административном интерфейсе добавьте Telegram-канал, нажмите **«Подключить чат»**, затем **«Выбрать группу в Telegram»**. Выберите группу, где у вас есть права администратора, и разрешите боту отправлять сообщения и документы.
+5. Выполните **«Тест»** и проверьте журнал рассылок.
+
+Ссылка привязки передает одноразовый код автоматически и действует десять минут. Для совместимых API-клиентов сохраняются `/connect CODE` и настройка `config.chat_id`. Для локального запуска вместо Docker перезапустите API и worker, затем запустите `.venv/Scripts/python -m app.workers.telegram_bot`.
+
+Участник подключенного чата может подтвердить демонстрационную оплату без веб-аккаунта, выбрать фактическую дату, исправить ее или снять отметку. Действия привязаны к инициатору и чату, действуют пятнадцать минут и проверяют ревизию счета. Проверяются привязка чата и доставка конкретного счета. После подтверждения бот отправляет HTML-чек и обновляет сообщение счета. Одновременно должен работать только один polling-процесс для одного токена.
+
+### Электронная почта
+
+SMTP задает **отправителя**, а канал Email — одного **получателя**. Пароль получателя не нужен; собственный почтовый сервер на VPS не требуется.
+
+```dotenv
+SMTP_HOST=smtp.example.com
+SMTP_PORT=465
+SMTP_SSL=true
+SMTP_STARTTLS=false
+SMTP_USERNAME=sender@example.com
+SMTP_PASSWORD=пароль_приложения
+SMTP_FROM=sender@example.com
 ```
 
-Set `ADMIN_LOGIN` and `ADMIN_PASSWORD` in `.env`. The example uses `admin / change-me-before-use` for local development. Both `admin` and active `user` accounts can sign in. Users can read payments, periods, reports, documents and receipts, and can confirm or correct demonstration payments. User management, payment/channel/group management, audit logs and delivery operations remain administrator-only. Explicit demo seeding creates a sample participant record, eight example expenses, and audience groups. Seeding is idempotent and never resets existing payments. No external channels are seeded.
+Для STARTTLS обычно используют порт 587, `SMTP_SSL=false` и `SMTP_STARTTLS=true`. Неявный TLS имеет приоритет над STARTTLS; оба режима проверяют сертификат. После изменения `.env` пересоздайте API и worker:
 
-API: `http://localhost:8000`. Health: `/health`. Start the neighboring Front repository to sign in, then open `/api/v1/docs` in that same browser. Swagger and the live `/api/v1/openapi.json` require the session cookie. The committed `openapi.json` can be read without running the application.
+```powershell
+docker compose up -d --force-recreate api worker
+```
 
-Compose starts PostgreSQL, API and worker. Migrations run before API startup; worker waits for a healthy API. Data and attachments use separate persistent Docker volumes. `docker compose down` keeps data. Run only one polling bot for a token.
+Добавьте канал **«Email через SMTP»** с адресом получателя, выполните тест и проверьте журнал. Письмо содержит текстовую и HTML-версии и ссылку подтверждения оплаты одного счета.
 
-## Local Python / SQLite
+### Webhook и встроенный журнал
 
-Requires Python 3.12+. SQLite is the default for local development; Docker overrides `DATABASE_URL` with PostgreSQL.
+Webhook передает JSON по HTTP(S), без перенаправлений, по умолчанию только на публичные адреса. `X-Invoice-Event-ID` сохраняется при повторах; получатель должен использовать его для устранения дублей. `X-Invoice-Signature` — HMAC-SHA256 точного тела запроса с секретом канала, в шестнадцатеричном виде.
+
+`ALLOW_PRIVATE_WEBHOOKS=true` разрешает частные адреса для доверенной среды разработки. Внутренний канал автоматически фиксирует события в административном журнале; отдельного подключения участниками и кнопок оплаты у него нет.
+
+### VK Teams, Mattermost и Битрикс24
+
+Подключение хранит учетные данные бота и адрес сервера, а канал — конкретный чат. Одно подключение обслуживает несколько каналов. Секреты шифруются ключом `INTEGRATIONS_ENCRYPTION_KEY` и не возвращаются в API. Создать ключ можно командой:
+
+```powershell
+.venv/Scripts/python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Сохраните результат в `.env` и используйте одинаковый ключ для серверных процессов. После изменения или включения подключения нужна повторная проверка API.
+
+- **VK Teams:** токен бота, Chat ID и работающий серверный опрос событий.
+- **Mattermost:** адрес сервера, токен бота и Channel ID. Для кнопок сервер мессенджера должен достигать публичного HTTPS-адреса приложения `PUBLIC_APP_URL`; нужны поддержка используемых карточек Blocks и право загрузки чеков.
+- **Битрикс24:** входящий вебхук с доступом `imbot`, проверка доступа, затем явная регистрация бота Chatbots 2.0. Готовое подключение имеет `setup_status=ready` и идентификатор бота. Добавьте бота в чат и укажите Dialog ID, например `chat123`.
+
+Битрикс24 получает события через отдельный процесс `app.workers.bitrix24_runner` — сервис `bitrix-events` в Compose; публичный callback ему не требуется. Проверка API подключения не подтверждает полный сценарий доставки, кнопок и чеков: его нужно проверить в целевом чате.
+
+## Публичные ссылки на счет
+
+### Просмотр без входа: `/invoice/:token`
+
+`GET /api/v1/public/invoices/{token}` возвращает один счет: название, описание, сумму, валюту, тип, срок, статус, фактическую дату и задержку. Не раскрывает плательщика, другие счета, документы, чеки, журналы и ссылки оплаты; токен просмотра не дает права изменять счет.
+
+Для добавления ссылок в новые уведомления задайте `PUBLIC_FRONTEND_URL` и включите `PUBLIC_INVOICE_VIEW_ENABLED=true` после развертывания соответствующей страницы фронтенда. Публичный адрес должен быть HTTPS origin без пути; HTTP разрешен только для локальной разработки. Он не выводится из заголовка Host или списка CORS.
+
+У каждого периода отдельный случайный 256-битный токен. Ссылка сохраняется после оплаты и отмены, не зависит от активности канала и действует до явного отзыва. Отключение флага прекращает добавление ссылок в уведомления, но не отзывает выданные ссылки. Для программного отзыва используется `app.modules.invoices.view_links.revoke_view_link(db, occurrence_id)` с фиксацией транзакции вызывающей стороной.
+
+### Подтверждение из письма: `/pay/:token`
+
+Это отдельная возможность: получатель явно подтверждает демонстрационную оплату одного счета и скачивает действующий демонстрационный чек. Открытие страницы или проверка ссылки почтовым сканером ничего не оплачивает.
+
+Токен привязан к счету и почтовому каналу, действует до 90 дней, недоступен при отключенном канале и отзывается при смене адреса получателя. Его обладатель может подтвердить счет, поэтому ссылку следует передавать только получателю. Отмененный счет оплатить нельзя; запись требует актуальной ревизии и допустимой фактической даты.
+
+Публичные ответы используют `no-store`, `no-referrer` и запрет индексации. Логи приложения скрывают пути ссылок просмотра; при настройке собственного reverse proxy исключите из журналов пути с токенами доступа.
+
+## B2B: входящие счета поставщиков
+
+Партнерский API принимает счет одним JSON-запросом `POST /api/b2b/v1/invoices`. Счет сразу попадает в реестр со статусом `submitted` («К оплате»); PDF и предварительное одобрение администратором не требуются. Событие уведомления фиксируется в той же транзакции.
+
+Для включения нужны `B2B_ENABLED=true`, постоянный непустой `B2B_API_KEY_PEPPER` и примененные миграции. Администратор создает поставщика, покупателя, доступ и проверенные реквизиты, затем выдает Bearer-ключ с нужными правами. Среды `test` и `live` изолированы.
+
+Создание требует `Idempotency-Key`: повтор того же запроса возвращает прежний результат без второго счета. Финансовые данные после создания не редактируются. Поставщик может отозвать свой неоплаченный счет с указанием ревизии и причины; администратор учитывает оплату и исправляет ошибочную отметку с причиной. Вложения необязательны и требуют отдельных прав.
+
+Формат JSON, права и сценарии описаны в [руководстве B2B](docs/b2b-json-api.md).
+
+## MCP: работа через ИИ-ассистента
+
+MCP работает отдельным процессом по стандартному вводу и выводу (`stdio`) и обращается к существующему REST API под личной учетной записью. Не подключается напрямую к базе, не запускает сервер и не меняет правила доступа. Публичного HTTP-сервера MCP и OAuth в этой реализации нет.
+
+### Подключение сотрудника
+
+Для самостоятельного [npm-пакета `invoice-keeper-mcp`](https://www.npmjs.com/package/invoice-keeper-mcp) нужен **Node.js 22.18+**. Python, Docker и исходники сервера сотруднику не нужны. В настройках ИИ-клиента с поддержкой `mcpServers`:
+
+```json
+{
+  "mcpServers": {
+    "invoice-keeper": {
+      "command": "npx",
+      "args": ["--yes", "invoice-keeper-mcp@1.0.0"],
+      "env": {
+        "IK_MCP_API_URL": "https://invoice.example.com",
+        "IK_MCP_LOGIN": "ваш-логин",
+        "IK_MCP_PASSWORD": "ваш-пароль",
+        "IK_MCP_READ_ONLY": "true"
+      }
+    }
+  }
+}
+```
+
+Замените адрес и реквизиты своими. URL — origin API без `/api`, пути и параметров. Для удаленного API нужен HTTPS; HTTP разрешен только для loopback. Секреты передавайте через личное окружение, хранилище клиента или исключенный из Git файл `--env-file`. Пакет не читает серверный `.env`.
+
+### Операции и ограничения
+
+Полный режим предоставляет 15 инструментов: текущая учетная запись, список и карточка счетов, регулярные шаблоны, сводка, бюджет, группы, каналы, доставка, аудит, создание разового и регулярного платежей, изменение оплаты, остановка шаблона и отмена разового счета.
+
+`IK_MCP_READ_ONLY=true` оставляет девять инструментов чтения. Бюджет отключен, потому что создает прогнозные периоды. Режим записи не повышает роль пользователя: административные операции по-прежнему требуют `admin`.
+
+Суммы передаются десятичными строками, даты — как `YYYY-MM-DD`. Перед изменением оплаты нужно прочитать `revision` и передать `expected_revision`; после `409` перечитать счет. `unpaid` включает просрочку. Списки с `possibly_truncated` нельзя считать полной историей. После сетевой ошибки записи проверьте состояние перед повтором: создание обычного счета не является идемпотентным.
+
+Для разработки также предусмотрен отдельный Python stdio-адаптер `python -m mcp_server`: ему нужны Python 3.12+, зависимости `requirements-mcp.lock` в отдельном `.venv-mcp` и личный `.env.mcp`. Локальная обертка `npx --yes ./Back` из родительского каталога использует это окружение и требует Node.js 20+. Это отдельный вариант запуска; API и Docker-развертывание не требуют MCP-зависимостей.
+
+## Технологии и структура проекта
+
+Используются Python 3.12+, FastAPI, Pydantic Settings, SQLAlchemy, Alembic, PostgreSQL 16, SQLite для локальной разработки, aiogram, HTTPX и cryptography. Проверки выполняются через pytest. Версии зависимостей закреплены в `requirements.lock`.
+
+Код организован по предметным модулям:
+
+```text
+app/
+  main.py              — создание FastAPI и подключение маршрутов
+  core/                — настройки, БД, безопасность, запуск и пробуждение worker
+  modules/             — счета, платежи, пользователи, каналы, B2B и другие модули
+  integrations/        — адаптеры VK Teams, Mattermost и Битрикс24
+  workers/             — очередь доставки, Telegram и обработка событий Битрикс24
+  presentation/        — шаблоны сообщений и демонстрационных чеков
+  shared/              — общие модели, схемы, пагинация и проверки
+  seed.py              — явное заполнение демонстрационными данными
+migrations/            — версии схемы Alembic
+tests/                 — проверки API, предметных правил и интеграций
+docs/                  — руководства для интеграций
+deploy/                — инструкция VPS и конфигурация Caddy
+compose.yml            — PostgreSQL, API, worker и процессы интеграций
+openapi.json           — сохраненная спецификация API
+```
+
+## Локальный запуск
+
+Нужен **Python 3.12+**. Из каталога `Back` в PowerShell:
 
 ```powershell
 python -m venv .venv
 .venv/Scripts/python -m pip install -r requirements.lock
 Copy-Item .env.example .env
+```
+
+Если `.env` уже существует, сохраните его настройки вместо повторного копирования. Задайте `ADMIN_LOGIN` и `ADMIN_PASSWORD`. Значение `admin / change-me-before-use` из примера предназначено для локальной разработки.
+
+Примените миграции и запустите API:
+
+```powershell
 .venv/Scripts/python -m alembic upgrade head
-.venv/Scripts/python -m app.seed
 .venv/Scripts/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-In another terminal:
+В другом терминале из того же каталога:
 
 ```powershell
-.venv/Scripts/python -m app.worker
+.venv/Scripts/python -m app.workers.worker
 ```
 
-Do not run the local API on port 8000 while the Docker API uses that port. Local SQLite and Docker PostgreSQL are separate databases. Dependency versions are pinned in `requirements.lock`; `requirements.txt` expresses supported ranges.
+Для событий Битрикс24 запустите отдельный процесс:
 
-## Telegram
-
-1. Open the official https://t.me/BotFather, run `/newbot`, and create a bot. Put the issued token in `Back/.env`: `TELEGRAM_BOT_TOKEN=your_token`. This ignored file is server configuration; no token belongs in Front or in a group message.
-2. From Back, run `docker compose --profile telegram up -d --build --force-recreate api worker bot`. This recreates all three services with the new token. For a local Python setup, restart API and worker, then run `python -m app.telegram_bot`.
-3. In the admin UI, add a Telegram channel and click **Подключить чат**, then **Выбрать группу в Telegram**.
-4. Telegram opens its group selector. Choose a group where you are an administrator and confirm adding the bot. The `startgroup` link passes the one-time code automatically; no command needs to be typed. Links expire in ten minutes. The bot must be allowed to send messages and documents. The `/connect CODE` handler remains available for older API clients; `config.chat_id` is another API option.
-5. Use **Тест**, then inspect **Уведомления**. A running worker sends queued events.
-
-Any participant in a connected target chat can use **Оплатить**, then confirm demo payment, without a web account. The confirmation button belongs to the participant who opened it. **Оплачено ранее · выбрать дату** opens a calendar for the actual payment date, including overdue invoices. A confirmation step creates the demo receipt. Paid invoices offer **Исправить дату оплаты** and **Отменить отметку**. Due dates stay unchanged; delay is recomputed. Action buttons are bound to the initiating user and chat, expire after fifteen minutes, and reject stale invoice revisions. Colored native Telegram buttons emphasize payment, receipt and cancellation. Bot callbacks cannot administer templates or users. They are validated against connected chats and a delivery for that specific invoice. Ordinary users may use the web/API payment operations; participant Telegram actions do not require a web account.
-
-The same domain service handles web and bot confirmation. A conditional revision update permits one winner on simultaneous clicks. Demo receipts are sent as HTML files to the group and retained in the invoice card. They are labeled as demonstrations.
-
-## Channels and targeted delivery
-
-Default broadcast means all active configured channels. An administrator can create named audience groups containing channel IDs and select groups for a recurring payment. Repeated recipients are deduplicated. In-app events retain a complete shared journal. Groups affect delivery, not web visibility.
-
-A new channel becomes eligible for future releases from its connection moment: for Telegram this is the successful chat link, for email and webhook it is channel creation. Invoices released earlier are not queued for that channel automatically. Channels that already existed before this rule keep their historical delivery behavior.
-
-Payment descriptions are part of the period projection and are included in the admin/user period API, in-app and webhook payloads, Telegram messages, plain-text/HTML email, public email invoice pages and demonstration receipts. The same field is used for recurring and one-time payments.
-
-Forecast periods are generated for budgeting but are not released to notification channels until their initial/reminder window is reached. A channel connected before release can receive that future period; a channel connected after release does not receive it retroactively. The worker automatically releases only the current three-day reminder window. It does not broadcast all old overdue debts after downtime. An administrator can explicitly request a missed reminder with `POST /api/v1/notifications/occurrences/{occurrence_id}/remind`. The endpoint is idempotent and refuses an uncertain delivery instead of blindly resending it.
-
-- Email: set `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`, and provider credentials. `SMTP_SSL=true` enables implicit TLS (usually port 465); `SMTP_SSL=false` with `SMTP_STARTTLS=true` enables STARTTLS (usually 587). Implicit TLS takes precedence over STARTTLS. Both modes verify TLS certificates. Each email channel names one recipient.
-- Webhook: HTTP(S) JSON, no redirects, public addresses by default. `X-Invoice-Event-ID` is stable across retries. `X-Invoice-Signature` is the hex HMAC-SHA256 of the exact request body using the channel secret. Use the event ID to deduplicate on the receiver. Private destinations are only allowed when explicitly configured with `ALLOW_PRIVATE_WEBHOOKS=true` for a trusted development setup.
-- In-app: enabled automatically as the administrator's delivery journal. It has no participant portal or payment controls.
-
-SMTP settings describe the **sender**, not the recipients. The VPS runs this application and connects to the sender's existing mail service; it does not need to host a mail server. For example, create a dedicated Yandex mailbox, enable mail-client access and create a Mail app password, then configure:
-
-```dotenv
-SMTP_HOST=smtp.yandex.ru
-SMTP_PORT=465
-SMTP_SSL=true
-SMTP_STARTTLS=false
-SMTP_USERNAME=your_mailbox_login
-SMTP_PASSWORD=your_mail_app_password
-SMTP_FROM=your_mailbox_login@yandex.ru
+```powershell
+.venv/Scripts/python -m app.workers.bitrix24_runner
 ```
 
-Use your real sender login, app password and address. Provider instructions: https://yandex.ru/support/yandex-360/customers/mail/ru/mail-clients/others. After changing the ignored `.env`, run `docker compose up -d --force-recreate api worker` from Back. Add an **Email через SMTP** channel in the admin panel with the recipient's address, then use **Тест** and inspect the delivery journal. Recipient passwords are never needed. Live SMTP verification requires sender credentials; adapters are tested in both TLS modes.
+По умолчанию используется SQLite в `data/invoice-keeper.db`. Для необязательного заполнения примерами после миграций выполните `.venv/Scripts/python -m app.seed`. Заполнение создает демонстрационного участника, восемь примеров расходов и группы; повторный запуск не сбрасывает платежи. Внешние каналы автоматически не создаются.
 
-Delivery jobs are durable and claimed atomically. Ordinary retries and restarts do not enqueue duplicate reminders for an occurrence/channel/event. Definite failures retry with backoff up to five times. A timeout or interrupted sender has an unknown result: status becomes **Проверьте доставку**, requiring inspection before manual retry. Telegram and SMTP do not provide end-to-end exactly-once delivery guarantees.
+API доступен по адресу [http://127.0.0.1:8000](http://127.0.0.1:8000), проверка состояния — [/health](http://127.0.0.1:8000/health). Для интерфейса запустите соседний `Front`. В Linux/macOS используйте `.venv/bin/python` вместо `.venv/Scripts/python`.
 
-Creation sends an immediate event for the first period; within three days of the due date this is the reminder itself. Subsequent reminders are queued when an unpaid period enters the three-day window. Paid periods are skipped. Stopping a template cancels unpaid current/future periods, preserves old debts and history, and stops its reminders. Status changes update previously sent Telegram invoice messages.
+## Запуск в Docker
 
-Concurrent budget requests and worker runs use conflict-safe inserts for periods and delivery events. Telegram chat-link codes are consumed atomically. Retrying a partially completed Telegram status update accepts messages that already have the requested content and continues updating the remaining messages. Stopping a template only notifies recipients about previously issued periods, without sending cancellations for every future budget period.
+Нужен Docker с Compose. Из каталога `Back` создайте `.env`, задайте учетные данные администратора и уникальный `POSTGRES_PASSWORD` перед первым запуском базы:
 
-## Domain rules
+```powershell
+Copy-Item .env.example .env
+# После заполнения .env:
+docker compose up -d --build
+```
 
-- Every period is a distinct occurrence with amount/title/currency snapshots; unpaid old periods do not stop new ones.
-- Monthly, quarterly and yearly dates retain the original day anchor. Missing days use month end, then recover the anchor later. Weekly repetition is also supported.
-- Due dates and actual payment dates use `APP_TIMEZONE`. A due-day payment is on time. Paid late and outstanding overdue are distinct states. Correcting actual date recomputes delay; cancelling confirmation clears actual date and payer.
-- Amounts are Decimal/Numeric; RUB, USD and EUR are summed separately. No exchange rates.
-- A generated receipt is voided after cancellation or date correction; date correction issues a replacement when a demo receipt existed. Audit history remains.
-- Files: PDF, PNG, JPEG, TXT up to 10 MiB; signatures checked for binary formats. Files are stored outside public static paths and downloaded through authenticated endpoints. Links permit HTTP(S) only.
+Compose запускает PostgreSQL, API, worker и `bitrix-events`. Миграции применяются перед стартом API; фоновые процессы ждут его готовности. Telegram включается профилем `telegram`, ClamAV для B2B — профилем `clamav` и соответствующими настройками окружения.
 
-## One-time payments
+```powershell
+docker compose --profile telegram up -d --build
+docker compose ps
+docker compose logs --tail 100 api worker
+```
 
-Administrators can create a single payment with `POST /api/v1/one-time-payments` using `title`, `description`, `amount`, `currency`, `due_date` and optional `group_ids`. The response contains `payment_type: "one_time"`. A one-time payment creates exactly one period, uses the same delivery, Telegram, email, demonstration-payment, receipt, attachment and audit flows as recurring payments, and is never regenerated by the worker, restart or budget calculation.
+Для новой демонстрационной базы при необходимости:
 
-One-time payments are included in `/api/v1/payment-occurrences`, `/api/v1/payments/summary` and `/api/v1/payments/budget`. Filter periods with `payment_type=one_time` or `payment_type=recurring`. They are excluded from `/api/v1/recurring-payments`. An administrator can cancel an unpaid one-time payment with `DELETE /api/v1/one-time-payments/{payment_id}`; this preserves the period and history and is separate from cancelling a payment confirmation.
+```powershell
+docker compose exec api python -m app.seed
+```
 
-## Authentication and configuration
+API опубликован только на loopback-порту 8000. PostgreSQL и вложения используют отдельные постоянные тома. `docker compose down` сохраняет данные. Локальная SQLite и Docker PostgreSQL — разные базы; не запускайте локальный и Docker API одновременно на одном порту.
 
-Passwords use salted PBKDF2-SHA256. Sessions use opaque random tokens, hashed in the database, HttpOnly/SameSite cookies, and seven-day expiry. Logout revokes the session. Password changes and user deletion revoke that user's sessions. Both roles can edit their own display name and change their password in **Мой профиль**. Login, role and activation remain outside self-service; administrators cannot be edited through the user-management API.
+## Настройки и взаимодействие с API
 
-`GET /api/v1/auth/me` reads the current account; `PATCH /api/v1/auth/me` accepts only `name` (trimmed, 1–120 characters). `POST /api/v1/auth/password` accepts `current_password` and `new_password` (8–200 characters, different from the current password). A wrong current password returns 400 without logging out, repeated failed attempts return 429, and a concurrent stale change returns 409. Success revokes **all** sessions, including the current one, and clears the cookie. The frontend returns to login. Profile events are audited without passwords or hashes.
+Основные параметры находятся в [.env.example](.env.example). Реальный `.env` исключен из Git и Docker-контекста.
 
-`.env` selects the active administrator at startup. Migration `0006` stores the last configured admin password hash separately: passwords changed in the profile survive API/worker/bot restarts with unchanged configuration. Changing `ADMIN_PASSWORD` to a **different configuration value** and restarting resets the administrator password and revokes sessions, providing recovery. Changing `ADMIN_LOGIN` deactivates the previous administrator and revokes its sessions. Existing names are preserved. Apply migrations before starting the updated services; restore a database backup rather than downgrading this migration if preservation of a profile-set administrator password is required.
+- `DATABASE_URL` — подключение к БД; Compose переопределяет его на PostgreSQL.
+- `ADMIN_LOGIN`, `ADMIN_PASSWORD` — конфигурация администратора.
+- `APP_TIMEZONE` — часовой пояс учета дат, по умолчанию `Europe/Moscow`.
+- `FRONTEND_ORIGIN` — точные разрешенные origins через запятую для CORS и проверки источника изменений. Первый используется для почтовых ссылок оплаты.
+- `COOKIE_SECURE` — передача сессионной cookie только по HTTPS; для публичного развертывания задайте `true`.
+- `PUBLIC_FRONTEND_URL`, `PUBLIC_INVOICE_VIEW_ENABLED` — адрес и включение ссылок просмотра.
+- `PUBLIC_APP_URL`, `INTEGRATIONS_ENCRYPTION_KEY` — адрес обратных вызовов и ключ шифрования интеграций.
+- `TELEGRAM_BOT_TOKEN`, `SMTP_*` — отправка во внешние каналы.
+- `WORKER_INTERVAL_SECONDS` — период фоновых проверок, по умолчанию 30 секунд.
+- `B2B_ENABLED`, `B2B_API_KEY_PEPPER`, `B2B_DOCUMENT_*`, `B2B_CLAMAV_*` — партнерский API и обработка вложений.
 
-`FRONTEND_ORIGIN` is a comma-separated exact origin allowlist used by CORS and mutation origin checks. Defaults cover local Vite (5173) and Docker front (8080), both on localhost/127.0.0.1. For a future HTTPS deployment set the real origin, `COOKIE_SECURE=true`, unique credentials and trusted SMTP/webhook endpoints. Secrets are never committed or returned in channel responses. The webhook secret is preserved when toggling a channel.
+Пароли хешируются PBKDF2-SHA256 с солью. Сессии используют случайные токены, в базе хранятся их хеши; cookie имеет HttpOnly/SameSite, срок сессии — семь дней. Выход отзывает сессию, смена пароля и удаление пользователя — все его сессии.
 
-## Tests and specification
+Пароль администратора, измененный в профиле, сохраняется при перезапуске с прежней конфигурацией. Новое значение `ADMIN_PASSWORD` в `.env` сбрасывает пароль администратора и отзывает его сессии — это механизм восстановления доступа. Смена `ADMIN_LOGIN` деактивирует прежнего администратора.
+
+Основной REST API расположен под `/api/v1`, партнерский — под `/api/b2b/v1`. Swagger `/api/v1/docs` и живая спецификация `/api/v1/openapi.json` требуют сессионную cookie: сначала войдите через фронтенд и открывайте документацию API в том же браузере на совместимом адресе. Сохраненная [спецификация OpenAPI](openapi.json) доступна без запуска приложения.
+
+## Проверки и спецификация
+
+Из каталога сервера с установленными зависимостями:
 
 ```powershell
 .venv/Scripts/python -m pytest -q
+```
+
+Тесты используют свежие временные SQLite-базы. Для PostgreSQL задайте `TEST_DATABASE_URL` на отдельную одноразовую тестовую базу: фикстуры создают и удаляют в ней таблицы. Рабочую базу для тестов использовать нельзя.
+
+Проверяются роли, даты и периодичность, оплата и конфликты ревизий, чеки, вложения, пагинация, публичные ссылки, очереди, адаптеры интеграций, профиль, ограничения частоты запросов и B2B. Проверки на имитации внешнего API не подтверждают реальную доставку провайдером.
+
+Обновление сохраненной спецификации после изменения API:
+
+```powershell
 .venv/Scripts/python -c "from app.main import app; import json; from pathlib import Path; Path('openapi.json').write_text(json.dumps(app.openapi(), ensure_ascii=False, indent=2), encoding='utf-8')"
 ```
 
-Tests default to fresh temporary SQLite databases. To test PostgreSQL, set `TEST_DATABASE_URL` to a **separate disposable test database**: fixtures create and drop application tables there. Never point it at the working database. Tests cover permissions, dates, period independence, reminder deduplication, concurrency, receipts, attachments, totals and delivery adapters.
+## Порядок обновления и ограничения
 
-## Demo walkthrough
+Сначала обновите сервер и примените миграции, затем фронтенд. Для ссылок просмотра сначала разверните backend с выключенным флагом, затем публичную страницу и proxy, после этого включите `PUBLIC_INVOICE_VIEW_ENABLED` и пересоздайте серверные процессы. Уже доставленные письма не изменяются; массовая повторная рассылка не требуется.
 
-Sign in as admin → connect Telegram → use **Выставить счет** and choose recipients → inspect delivery → open the connected Telegram group as a participant → confirm payment inside the notification → receive the demonstration receipt → inspect the updated status and independent next period in the admin panel. Administrative screens issue and monitor invoices; they do not offer demo payment. The authenticated administrator API retains status/date correction and cancellation endpoints for historical corrections. Compare monthly/yearly totals by currency.
+Перед обновлением сохраняйте резервную копию БД, вложений и `.env`. Обычное обновление не должно удалять Docker-тома. Не меняйте `POSTGRES_PASSWORD` у существующей базы без отдельной смены пароля в PostgreSQL. Сохраняйте ключ шифрования интеграций и B2B pepper вместе с резервными настройками.
 
-Telegram/SMTP live delivery needs user-provided credentials. Without them, the admin panel and delivery journal work, but participant payment through Telegram requires configuring and starting the bot. GitHub: https://github.com/makssssko2/HackAutumn2026Back. Deployment: https://aezainvoice.xxxmgxxx.com. Environment files remain ignored.
+Настройка VPS, HTTPS и Caddy описана в [инструкции развертывания](deploy/README.md). Для рабочего HTTPS-адреса задайте разрешенный `FRONTEND_ORIGIN`, публичные адреса и `COOKIE_SECURE=true`.
 
-## Public read-only invoice view
+Для проверки сценария: войдите администратором → подключите канал → выставьте счет → проверьте журнал доставки → подтвердите демонстрационную оплату участником в интерфейсе, чате или по почтовой ссылке → проверьте чек, статус и бюджет по валютам.
 
-`/invoice/:token` opens one specific occurrence without a web account. Its separate API, `GET /api/v1/public/invoices/{token}`, returns only title, description, amount/currency, payment type, due date, status, actual payment date and delay. It never exposes payer identifiers, other invoices, audit/delivery data, documents, receipts or payment links. No write operation accepts a view token; `/pay/:token` retains its existing separate payment capability.
-
-Configure `PUBLIC_FRONTEND_URL` as the public HTTPS origin (HTTP is accepted only for loopback development) and set `PUBLIC_INVOICE_VIEW_ENABLED=true` **after** deploying the public frontend route. The default is false. This explicit base URL is independent of the CORS origin list and incoming Host headers. Telegram gains a final **Посмотреть счёт** URL button; email gains a secondary read-only link while preserving its payment action; signed webhook payloads gain `view_url`. Existing message contents/callbacks and delivery deduplication remain in place.
-
-Migration `0008`, following chat integrations in `0007`, adds a unique, random 256-bit view capability per occurrence. It is created atomically and committed before the external send. Retries and status edits use the same URL. Each new period has a different URL. Links work until explicitly revoked, remain readable after payment/cancellation and do not depend on channel activation. Revocation is a service operation: `app.repositories.invoice_view_links.revoke_view_link(db, occurrence_id)` followed by the caller's commit; sending never silently recreates a revoked link. Disabling the feature stops new links in deliveries but existing non-revoked views continue working.
-
-Public API/HTML use no-store, no-referrer and noindex headers. Uvicorn redacts view paths including query strings; the Front Nginx access log omits public view/API paths. The checked-in Caddyfile does not enable access logging; any independently enabled proxy logging must also suppress capability paths. GET, link scanners and previews never mutate invoices. The frontend refreshes manually and on return to the visible tab, announces refresh results accessibly, and identifies stale data after network failures.
-
-Roll out backend/migration with the feature disabled, then Front/proxy, then enable the flag and recreate API/worker/bot. No historical mass resend is needed; old Telegram messages gain the button during normal state edits, while previously delivered email remains unchanged. Files/receipts remain in their existing authenticated/payment channels.
-
-## Email invoice actions
-
-SMTP messages contain both a plain-text fallback and responsive HTML in the orange/peach palette. The **Оплатить счет** button opens `/pay/:token`, without an account or admin-panel access. `FRONTEND_ORIGIN` must list the public HTTPS origin first, because it is used for email links.
-
-Each random 256-bit capability belongs to one delivered invoice and email channel and expires after 90 days. It is persisted before SMTP sends, survives uncertain delivery and retries, is unavailable while that channel is disabled, and is revoked when its email recipient changes. Anyone holding the link can confirm that invoice and download its active demo receipt, so do not forward it to outsiders. GET is read-only, including for mail scanners. POST requires explicit confirmation and the current revision; simultaneous or repeated confirmation has one winner. Cancelled invoices cannot be paid. Future actual dates are rejected. Public endpoints never grant list, admin or other-invoice access. New styling applies to newly sent emails; existing delivered messages cannot be changed.
+Реальная доставка Telegram, SMTP и других мессенджеров требует действительных учетных данных, сетевого доступа и запущенных серверных процессов. Проверка подключения не заменяет проверку сообщения, кнопок и чека в целевом канале. Браузер для фоновой доставки оставлять открытым не требуется.
