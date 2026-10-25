@@ -131,7 +131,7 @@ def test_profile_password_survives_bootstrap_and_config_change_recovers_admin(ad
 
 
 def test_concurrent_password_changes_have_one_winner(admin, monkeypatch):
-    import app.api.auth as auth
+    import app.modules.auth.router as auth
     cookie = admin.cookies.get('ik_session')
     barrier = Barrier(2)
     original_verify = auth.verify_password

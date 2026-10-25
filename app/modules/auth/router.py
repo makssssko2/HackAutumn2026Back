@@ -8,22 +8,34 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.security import current_user, hash_password, token_hash, verify_password
-from app.domain.formatters import user_out
-from app.domain.services import audit
+from app.shared.formatters import user_out
+from app.modules.payments.service import audit
 from app.models import AuthSession, User
-from app.repositories.auth import revoke_session
-from app.repositories.users import get_user_by_login, revoke_user_sessions
+from app.modules.auth.repository import revoke_session
+from app.modules.users.repository import get_user_by_login, revoke_user_sessions
 from app.schemas import LoginIn, PasswordChange, ProfilePatch
 
 router = APIRouter(prefix='/api/v1/auth', tags=['Auth'])
 
 login_attempts: dict[str, list] = defaultdict(list)
+MAX_LOGIN_ATTEMPT_KEYS = 10_000
+
+
+def _prune_login_attempts(now: datetime) -> None:
+    expired = [key for key, attempts in login_attempts.items()
+               if not attempts or now - attempts[-1] >= timedelta(minutes=1)]
+    for key in expired:
+        login_attempts.pop(key, None)
+    while len(login_attempts) > MAX_LOGIN_ATTEMPT_KEYS:
+        oldest = min(login_attempts, key=lambda key: login_attempts[key][-1])
+        login_attempts.pop(oldest, None)
 
 
 @router.post('/login')
 def login(data: LoginIn, request: Request, response: Response, db: Session = Depends(get_db)):
     ip = request.client.host if request.client else 'local'
     now = datetime.now(timezone.utc)
+    _prune_login_attempts(now)
     login_attempts[ip] = [s for s in login_attempts[ip] if now - s < timedelta(minutes=1)]
     if len(login_attempts[ip]) >= 10:
         raise HTTPException(429, 'Слишком много попыток. Попробуйте через минуту')
